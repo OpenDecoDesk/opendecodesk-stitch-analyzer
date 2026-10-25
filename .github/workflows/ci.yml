@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Python tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: Format tests
+        run: node --test tests/formats.test.mjs
+
+  build:
+    # Builds the downloadable apps on a version tag or when run by hand (Actions → CI → Run workflow).
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: test
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyinstaller==6.22.3 -r requirements.txt
+      - run: pyinstaller --noconfirm opendecodesk-stitch-analyzer.spec
+      - name: Self-test the macOS app
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: '"dist/OpenDecoDesk Stitch Analyzer.app/Contents/MacOS/OpenDecoDesk Stitch Analyzer" --self-test'
+      - name: Self-test the Windows app
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        # A windowed .exe has no console, so the result is its exit status.
+        run: |
+          $p = Start-Process -FilePath "dist/OpenDecoDesk Stitch Analyzer.exe" -ArgumentList "--self-test" -Wait -PassThru
+          Write-Host "self-test exit status $($p.ExitCode)"
+          exit $p.ExitCode
+      - name: Zip the macOS app
+        if: runner.os == 'macOS'
+        run: cd dist && ditto -c -k --keepParent "OpenDecoDesk Stitch Analyzer.app" "OpenDecoDesk-Stitch-Analyzer-macOS-AppleSilicon.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenDecoDesk-Stitch-Analyzer-${{ runner.os }}
+          path: |
+            dist/*.zip
+            dist/*.exe
+
+  release:
+    # On a version tag: publish the two builds as a GitHub release. The only job that may write.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Name the downloads
+        run: |
+          mv "dist/OpenDecoDesk Stitch Analyzer.exe" dist/OpenDecoDesk-Stitch-Analyzer-Windows.exe
+          ls -l dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          Analyze Tajima .DST, Barudan .DSB and ZSK .DSZ embroidery designs, and convert between them.
+
+          **Downloads**
+          - **Windows:** `OpenDecoDesk-Stitch-Analyzer-Windows.exe` — one portable file, nothing to install. It uses Microsoft Edge WebView2, which Windows 10 and 11 already have.
+          - **macOS (Apple Silicon):** unzip `OpenDecoDesk-Stitch-Analyzer-macOS-AppleSilicon.zip`. The app isn't signed yet: the first time, right-click it → Open. On an Intel Mac, run it from source (see the README).
+
+          **What it does:** a design preview with long and short stitches, jumps, trims, stops and needle changes marked; a table of long stitches by needle; a threshold grid; a quality report (stitch lengths, density, layering, a run-time estimate); comparing two designs. Converts DST → DSB or DSZ (with a needle map and "Trim before stop") and DSB/DSZ → DST. Everything runs on your computer and works offline.
+
+          DSZ export follows the only public description of the format and hasn't been confirmed on a ZSK machine yet — run a short test design first.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" \
+            dist/OpenDecoDesk-Stitch-Analyzer-Windows.exe \
+            dist/OpenDecoDesk-Stitch-Analyzer-macOS-AppleSilicon.zip \
+            --repo "$GITHUB_REPOSITORY" --title "OpenDecoDesk Stitch Analyzer $GITHUB_REF_NAME" --notes-file notes.md
