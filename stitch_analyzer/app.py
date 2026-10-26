@@ -33,7 +33,7 @@ FILE_TYPES = {
 def app_dir():
     """The per-user folder for the app's data (same places as OpenDecoDesk Machine Files)."""
     if sys.platform == "darwin":
-        base = os.path.expanduser("~/Library/Application Support")
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
     elif os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     else:
