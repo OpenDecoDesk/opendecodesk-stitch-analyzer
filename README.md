@@ -69,7 +69,7 @@ node --test tests/formats.test.mjs
 the save bridge all loaded, and exits 0 if they did. CI runs it on each built app.
 
 ## Making a release
-Push a tag like `v1.1.0`, and set the same version in `stitch_analyzer/__init__.py`, the page's
+Push a tag like `v0.1.0`, and set the same version in `stitch_analyzer/__init__.py`, the page's
 version stamp (`version-stamp` in `stitch_analyzer/web/index.html`) and the spec file — a test checks
 they agree. CI runs the tests, builds both apps, self-tests them and publishes them as a release.
 

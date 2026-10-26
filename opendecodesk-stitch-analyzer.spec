@@ -16,7 +16,7 @@ if sys.platform == "darwin":
         name=NAME + ".app",
         bundle_identifier="org.opendecodesk.stitchanalyzer",
         info_plist={
-            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleShortVersionString": "0.1.0",
             "NSHighResolutionCapable": True,
         },
     )
