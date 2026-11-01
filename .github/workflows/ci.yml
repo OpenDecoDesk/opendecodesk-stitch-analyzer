@@ -88,6 +88,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
+          **New in 0.1.1:** the app's icon — the OpenDecoDesk hoop with the D, as a magnifying glass.
+
           Analyze Tajima .DST, Barudan .DSB and ZSK .DSZ embroidery designs, and convert between them.
 
           **Downloads**
