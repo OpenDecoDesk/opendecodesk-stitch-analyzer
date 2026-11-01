@@ -17,7 +17,7 @@ if sys.platform == "darwin":
         icon="icons/icon.icns",
         bundle_identifier="org.opendecodesk.stitchanalyzer",
         info_plist={
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleShortVersionString": "0.1.1",
             "NSHighResolutionCapable": True,
         },
     )
