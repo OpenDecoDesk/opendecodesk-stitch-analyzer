@@ -79,6 +79,13 @@ python3 -m pip install pyinstaller -r requirements.txt
 pyinstaller --noconfirm opendecodesk-stitch-analyzer.spec
 ```
 
+The app's icon (`icons/`: the OpenDecoDesk navy tile, cream hoop and orange D, here the hoop as a magnifying glass) is made
+from its two drawings, `icons/icon-large.svg` (64 px and up) and `icons/icon-small.svg` (48 px and
+under), with OpenDecoDesk's icon script: in a checkout of
+[OpenDecoDesk](https://github.com/OpenDecoDesk/opendecodesk), `cd desktop && npm install`, then
+`npx electron icons/make-icons.js --large=<this repo>/icons/icon-large.svg --small=<this repo>/icons/icon-small.svg --out=<this repo>/icons`.
+Commit the `icon.icns`, `icon.ico` and `icon.png` it writes.
+
 ## Related
 [OpenDecoDesk Machine Files](https://github.com/OpenDecoDesk/opendecodesk-machine-files) copies designs
 between a folder and a SmartStitch machine on your network.
