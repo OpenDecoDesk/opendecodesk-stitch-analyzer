@@ -14,6 +14,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name=NAME + ".app",
+        icon="icons/icon.icns",
         bundle_identifier="org.opendecodesk.stitchanalyzer",
         info_plist={
             "CFBundleShortVersionString": "0.1.0",
@@ -21,4 +22,4 @@ if sys.platform == "darwin":
         },
     )
 else:
-    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name=NAME, console=False)
+    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name=NAME, console=False, icon="icons/icon.ico")
