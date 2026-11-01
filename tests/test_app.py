@@ -200,6 +200,32 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(re.findall(r'<span class="version-stamp">([^<]*)</span>', html), [__version__])
         self.assertIn(f"<title>OpenDecoDesk Stitch Analyzer {__version__}</title>", html)
 
+    def test_the_page_and_its_files_have_the_version_in_their_addresses(self):
+        # The address is the same on every run (fixed port), so this is what keeps a new version from
+        # showing an earlier one's page out of the window's cache.
+        self.assertEqual(app.page_url(), os.path.join(app.web_dir(), "index.html") + f"?v={__version__}")
+        html = read("stitch_analyzer", "web", "index.html")
+        self.assertIn(f'<link rel="stylesheet" href="fonts/plex.css?v={__version__}">', html)
+        self.assertIn(f'<script src="formats.js?v={__version__}"></script>', html)
+
+    def test_files_are_sent_with_no_store(self):
+        class Response:
+            def __init__(self):
+                self.headers = {"Last-Modified": "Tue, 27 Oct 2026 01:18:58 GMT"}
+
+            def set_header(self, name, value):
+                self.headers[name] = value
+
+        bottle = types.ModuleType("bottle")
+        bottle.static_file = lambda filename, root: Response()
+        with mock.patch.dict(sys.modules, {"bottle": bottle}):
+            app.no_store_files()
+            app.no_store_files()  # twice is harmless: not wrapped again
+            response = bottle.static_file("index.html", root="/web")
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertTrue(bottle.static_file.no_store)
+            self.assertEqual(bottle.static_file.__closure__[0].cell_contents.__name__, "<lambda>")
+
     def test_spec_takes_the_version_from_the_source(self):
         spec = read("opendecodesk-stitch-analyzer.spec")
         self.assertIn('"CFBundleShortVersionString": SHORT_VERSION', spec)
@@ -223,7 +249,7 @@ class BundleTests(unittest.TestCase):
 
     def test_page_loads_the_format_code_first(self):
         html = read("stitch_analyzer", "web", "index.html")
-        self.assertLess(html.index('<script src="formats.js"></script>'), html.index("<script>"))
+        self.assertLess(html.index(f'<script src="formats.js?v={__version__}"></script>'), html.index("<script>"))
 
 
 if __name__ == "__main__":

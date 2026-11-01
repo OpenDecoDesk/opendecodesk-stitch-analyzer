@@ -22,6 +22,10 @@ STAMPS = [
     (os.path.join("stitch_analyzer", "__init__.py"), r'^(__version__ = ")([^"\n]*)(")'),
     (PAGE, r"(<title>OpenDecoDesk Stitch Analyzer )([^<]*)(</title>)"),
     (PAGE, r'(<span class="version-stamp">)([^<]*)(</span>)'),
+    # The page's own files carry the version in their addresses, so a new version never gets an
+    # earlier one's copy from the window's cache (app.py does the same for the page itself).
+    (PAGE, r'(<link rel="stylesheet" href="fonts/plex\.css\?v=)([^"]*)(">)'),
+    (PAGE, r'(<script src="formats\.js\?v=)([^"]*)("></script>)'),
 ]
 
 
@@ -57,7 +61,7 @@ def read_version(root=ROOT):
 
 
 def stamp(version, root=ROOT):
-    """Write the version into __init__.py and the page (its <title> and version stamp)."""
+    """Write the version into __init__.py and the page (its <title>, version stamp and file addresses)."""
     if version != DEV and not VERSION_RE.match(version):
         raise ValueError(f"not a version: {version!r}")
     for name, pattern in STAMPS:

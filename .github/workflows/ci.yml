@@ -127,7 +127,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          **New:** the version is now the release date and the day's build number (like 2026.11.01.01). It shows in the window's title bar and at the top of the window, beside the OpenDecoDesk name.
+          **New:** the window always shows the version you opened. Before, it could show an earlier version's page for some hours after an update (the window kept a copy). The version is the release date and the day's build number (like 2026.11.01.02), in the title bar and at the top of the window.
 
           Analyze Tajima .DST, Barudan .DSB and ZSK .DSZ embroidery designs, and convert between them.
 

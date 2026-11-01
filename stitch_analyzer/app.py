@@ -9,6 +9,7 @@ import os
 import socket
 import sys
 import threading
+from urllib.parse import quote
 
 from . import __version__
 
@@ -48,6 +49,31 @@ def web_dir():
     if getattr(sys, "frozen", False):
         return os.path.join(sys._MEIPASS, "web")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+
+def page_url():
+    """The page, with the version in its address. The port (so the address) is the same on every run,
+    and the window keeps a cache: without this, a new version could show an earlier one's page."""
+    return os.path.join(web_dir(), "index.html") + "?v=" + quote(__version__)
+
+
+def no_store_files():
+    """pywebview's web server means to send its files with "no-store", but bottle's static_file answers
+    with its own headers, so the window's cache keeps the page and reuses it for hours (it guesses from
+    Last-Modified). This puts no-store on every file the page loads."""
+    import bottle
+
+    if getattr(bottle.static_file, "no_store", False):
+        return
+    static_file = bottle.static_file
+
+    def no_store(*args, **kwargs):
+        response = static_file(*args, **kwargs)
+        response.set_header("Cache-Control", "no-store")
+        return response
+
+    no_store.no_store = True
+    bottle.static_file = no_store
 
 
 def port_is_free(port):
@@ -168,7 +194,7 @@ def main(argv=None):
     api = Api()
     window = webview.create_window(
         WINDOW_TITLE,
-        os.path.join(web_dir(), "index.html"),
+        page_url(),
         js_api=api,
         width=1280,
         height=860,
@@ -177,6 +203,7 @@ def main(argv=None):
     )
     api.attach(window)
 
+    no_store_files()
     storage = os.path.join(app_dir(), "webview")
     os.makedirs(storage, exist_ok=True)
     start = dict(private_mode=False, storage_path=storage, http_port=pick_port())

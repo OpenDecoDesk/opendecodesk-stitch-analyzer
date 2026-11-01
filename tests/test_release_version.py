@@ -72,6 +72,14 @@ class StampTests(unittest.TestCase):
         self.assertIn('<span class="version-stamp">2026.11.01.01</span>', page)
         self.assertNotIn(">dev<", page)
 
+    def test_stamps_the_pages_file_addresses(self):
+        # So a new version's files are never an earlier one's from the window's cache.
+        rv.stamp("2026.11.01.01", self.root)
+        page = self.page()
+        self.assertIn('<link rel="stylesheet" href="fonts/plex.css?v=2026.11.01.01">', page)
+        self.assertIn('<script src="formats.js?v=2026.11.01.01"></script>', page)
+        self.assertNotIn("?v=dev", page)
+
     def test_leaves_the_rest_alone(self):
         before = self.page()
         rv.stamp("2026.11.01.01", self.root)
