@@ -59,8 +59,9 @@ python3 -m unittest discover -s tests -t . -v
 node --test tests/formats.test.mjs
 ```
 - `tests/test_app.py` — the desktop shell: saving through the dialog, where settings live, the port,
-  the self-test, and that the bundled page needs nothing from the internet. pywebview is stubbed, so
-  it needs only the standard library.
+  the self-test, the version in the title bar and the page's header, and that the bundled page needs
+  nothing from the internet. pywebview is stubbed, so it needs only the standard library.
+- `tests/test_release_version.py` — working out a release's version and stamping it in.
 - `tests/formats.test.mjs` — the DST, DSB and DSZ code in `stitch_analyzer/web/formats.js`, run in
   Node (22 or newer, no packages): converted files are compared byte for byte with recorded ones
   (`tests/fixtures/conversions.json`) and read back to check every stitch is where it was.
@@ -68,12 +69,17 @@ node --test tests/formats.test.mjs
 `python3 -m stitch_analyzer --self-test` opens the real window, checks the page, the format code and
 the save bridge all loaded, and exits 0 if they did. CI runs it on each built app.
 
-## Making a release
-Set the new version in `stitch_analyzer/__init__.py`, the page's version stamp (`version-stamp` in
-`stitch_analyzer/web/index.html`) and the spec file — a test checks they agree — and merge it to
-main. Then either run **Actions → CI → Run workflow** on main with **Publish a release** ticked, or
-push a tag like `v0.1.0` with the same version. CI runs the tests, builds both apps, self-tests them
-and publishes them as a release (tagged `v<version>`).
+## Versions and releases
+The version is the release date and that day's build number: `2026.11.01.01` is the first release
+made on 1 November 2026 (UTC), `2026.11.01.02` the second. It shows in the title bar and at the top
+of the page. Nobody sets it by hand: the source says `dev` (so does an app run from source or built
+by hand), and CI works it out when it publishes a release.
+
+To release: merge to main, then run **Actions → CI → Run workflow** on main with **Publish a
+release** ticked. CI runs the tests, works out the version from the tags already there
+(`scripts/release_version.py`), stamps it into `stitch_analyzer/__init__.py` and the page, builds
+both apps, self-tests them and publishes them as a release tagged `v<version>`. The download names
+stay the same from one release to the next.
 
 ## Build the apps yourself
 ```bash

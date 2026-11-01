@@ -3,14 +3,18 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish a release: v<version in stitch_analyzer/__init__.py>, from main"
+        description: "Publish a release (from main): the version is today's date and the day's build number"
         type: boolean
         default: false
+
+# Releases run one at a time, so two can't take the same build number; other runs aren't held up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.release && 'release' || github.run_id }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -34,10 +38,31 @@ jobs:
       - name: Format tests
         run: node --test tests/formats.test.mjs
 
+  version:
+    # The version the apps are built with. For a release (run by hand on main with "Publish a release"
+    # ticked) it's YYYY.MM.DD.NN: today's UTC date and the day's next build number after the tags
+    # already there (01 for the first). Otherwise it's "dev", as in the source.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        env:
+          RELEASE: ${{ inputs.release && github.ref == 'refs/heads/main' }}
+        run: |
+          if [ "$RELEASE" = "true" ]; then
+            v=$(git ls-remote --tags --refs origin | python3 scripts/release_version.py next)
+          else
+            v=dev
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Version: $v"
+
   build:
-    # Builds the downloadable apps on a version tag or when run by hand (Actions → CI → Run workflow).
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-    needs: test
+    # Builds the downloadable apps when run by hand (Actions → CI → Run workflow).
+    needs: [test, version]
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
@@ -47,6 +72,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Stamp the version
+        # Into __version__ (the window title, the self-test, the Mac app's version) and the page's header.
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python scripts/release_version.py stamp "$VERSION"
       - run: python -m pip install pyinstaller==6.22.3 -r requirements.txt
       - run: pyinstaller --noconfirm opendecodesk-stitch-analyzer.spec
       - name: Self-test the macOS app
@@ -73,25 +104,16 @@ jobs:
             dist/*.exe
 
   release:
-    # Publishes the two builds as a GitHub release, on a version tag or when run by hand on main with
-    # "Publish a release" ticked (which creates the tag v<version>). The only job that may write. A
-    # version is released once: a second run for the same one fails, so bump the version first.
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main')
-    needs: build
+    # Publishes the two builds as a GitHub release when run by hand on main with "Publish a release"
+    # ticked, tagged v<version> (the tag is created here). The only job that may write.
+    if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to create the release (and its tag)
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-      - name: The version
-        run: |
-          v=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' stitch_analyzer/__init__.py)
-          if [ -z "$v" ]; then echo "::error::No __version__ in stitch_analyzer/__init__.py"; exit 1; fi
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$v" ]; then
-            echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in stitch_analyzer/__init__.py ($v). Tag v$v instead, or change the version."
-            exit 1
-          fi
-          echo "TAG=v$v" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -105,7 +127,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          **New in 0.1.1:** the app's icon — the OpenDecoDesk hoop with the D, as a magnifying glass.
+          **New:** the version is now the release date and the day's build number (like 2026.11.01.01). It shows in the window's title bar and at the top of the window, beside the OpenDecoDesk name.
 
           Analyze Tajima .DST, Barudan .DSB and ZSK .DSZ embroidery designs, and convert between them.
 
@@ -117,7 +139,7 @@ jobs:
 
           DSZ export follows the only public description of the format and hasn't been confirmed on a ZSK machine yet — run a short test design first.
           NOTES
-          gh release create "$TAG" --target "$GITHUB_SHA" \
+          gh release create "v$VERSION" --target "$GITHUB_SHA" \
             dist/OpenDecoDesk-Stitch-Analyzer-Windows.exe \
             dist/OpenDecoDesk-Stitch-Analyzer-macOS-AppleSilicon.zip \
-            --repo "$GITHUB_REPOSITORY" --title "OpenDecoDesk Stitch Analyzer $TAG" --notes-file notes.md
+            --repo "$GITHUB_REPOSITORY" --title "OpenDecoDesk Stitch Analyzer $VERSION" --notes-file notes.md

@@ -157,7 +157,7 @@ class PlacesTests(unittest.TestCase):
 
 class SelfTestResultTests(unittest.TestCase):
     def answer(self, **kw):
-        got = {"formats": True, "page": True, "bridge": True, "version": f"v{__version__}"}
+        got = {"formats": True, "page": True, "bridge": True, "version": __version__}
         got.update(kw)
         return json.dumps(got)
 
@@ -165,10 +165,13 @@ class SelfTestResultTests(unittest.TestCase):
         self.assertEqual(app.self_test_result(self.answer()), (True, "ok"))
 
     def test_problems_are_named(self):
-        ok, msg = app.self_test_result(self.answer(bridge=False, version="v0.9"))
+        ok, msg = app.self_test_result(self.answer(bridge=False, version="2020.01.01.01"))
         self.assertFalse(ok)
         self.assertIn("bridge", msg)
-        self.assertIn("v0.9", msg)
+        self.assertIn("2020.01.01.01", msg)
+
+    def test_the_version_is_plain(self):
+        self.assertFalse(app.self_test_result(self.answer(version=f"v{__version__}"))[0])
 
     def test_garbage(self):
         self.assertFalse(app.self_test_result("nope")[0])
@@ -180,13 +183,31 @@ def read(*parts):
         return fh.read()
 
 
-class BundleTests(unittest.TestCase):
-    def test_versions_agree(self):
-        stamp = re.search(r'class="version-stamp">v([\d.]+)<', read("stitch_analyzer", "web", "index.html"))
-        spec = re.search(r'"CFBundleShortVersionString": "([\d.]+)"', read("opendecodesk-stitch-analyzer.spec"))
-        self.assertEqual(stamp.group(1), __version__)
-        self.assertEqual(spec.group(1), __version__)
+class VersionTests(unittest.TestCase):
+    def test_source_says_dev(self):
+        # The real version is stamped in by CI for a release (scripts/release_version.py).
+        self.assertEqual(__version__, "dev")
 
+    def test_window_title_has_the_version(self):
+        self.assertEqual(app.WINDOW_TITLE, f"OpenDecoDesk Stitch Analyzer {__version__}")
+
+    def test_header_shows_the_brand_and_the_version_once(self):
+        html = read("stitch_analyzer", "web", "index.html")
+        header = re.search(r'<header class="app-header">(.*?)</header>', html, re.S).group(1)
+        self.assertIn('<svg class="brand-mark" viewBox="0 0 32 32"', header)
+        self.assertIn('stroke="#E8743B"', header)  # the orange D of the OpenDecoDesk mark
+        self.assertIn('<span class="brand-name"><strong>OpenDecoDesk</strong> Stitch Analyzer</span>', header)
+        self.assertEqual(re.findall(r'<span class="version-stamp">([^<]*)</span>', html), [__version__])
+        self.assertIn(f"<title>OpenDecoDesk Stitch Analyzer {__version__}</title>", html)
+
+    def test_spec_takes_the_version_from_the_source(self):
+        spec = read("opendecodesk-stitch-analyzer.spec")
+        self.assertIn('"CFBundleShortVersionString": SHORT_VERSION', spec)
+        self.assertIn('"CFBundleVersion": BUNDLE_VERSION', spec)
+        self.assertNotRegex(spec, r"\d+\.\d+\.\d+")
+
+
+class BundleTests(unittest.TestCase):
     def test_works_offline(self):
         allowed = {"http://www.w3.org/2000/svg"}
         for parts in (("index.html",), ("formats.js",), ("fonts", "plex.css")):

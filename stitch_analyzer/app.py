@@ -15,6 +15,8 @@ from . import __version__
 log = logging.getLogger("stitch_analyzer")
 
 APP_TITLE = "OpenDecoDesk Stitch Analyzer"
+# The title bar: name and version, e.g. "OpenDecoDesk Stitch Analyzer 2026.11.01.01" ("… dev" from source).
+WINDOW_TITLE = f"{APP_TITLE} {__version__}"
 APP_DIR_NAME = "opendecodesk-stitch-analyzer"
 # The page keeps its settings in localStorage, which belongs to the page's address (port included),
 # so the port must be the same on every run for the settings to be remembered.
@@ -132,8 +134,8 @@ def self_test_result(raw):
     if not isinstance(got, dict):
         return False, f"unexpected answer: {raw!r}"
     problems = [k for k in ("formats", "page", "bridge") if not got.get(k)]
-    if got.get("version") != f"v{__version__}":
-        problems.append(f"version {got.get('version')!r} != v{__version__}")
+    if got.get("version") != __version__:
+        problems.append(f"version {got.get('version')!r} != {__version__}")
     return (not problems), ("ok" if not problems else "failed: " + ", ".join(problems))
 
 
@@ -165,7 +167,7 @@ def main(argv=None):
 
     api = Api()
     window = webview.create_window(
-        APP_TITLE,
+        WINDOW_TITLE,
         os.path.join(web_dir(), "index.html"),
         js_api=api,
         width=1280,
