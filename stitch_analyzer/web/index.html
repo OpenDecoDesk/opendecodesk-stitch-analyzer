@@ -395,6 +395,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tab-content.active { display: flex; flex-direction: column; }
 
 /* ── Overview tab ────────────────────────────────────────────────────────── */
+.outside-note { margin-top: 0; }
 .overview-wrap {
   padding: 24px;
   display: flex;
@@ -1285,6 +1286,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     <div class="tab-content active" id="tab-overview">
       <div class="overview-wrap">
         <div class="stat-cards" id="statCards"></div>
+        <div id="outsideNote" hidden></div>
         <div class="svg-panel" id="svgPanel">
           <div class="svg-panel-header">
             <span class="svg-panel-title">Design Preview</span>
@@ -1884,6 +1886,20 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
       L.push(`<polygon points="${px.toFixed(1)},${(py-R).toFixed(1)} ${(px+R).toFixed(1)},${py.toFixed(1)} ${px.toFixed(1)},${(py+R).toFixed(1)} ${(px-R).toFixed(1)},${py.toFixed(1)}" fill="none" stroke="#3AAA70" stroke-width="1.8"/>`);
       L.push(`<text x="${(px+R+2).toFixed(1)}" y="${(py-R+1).toFixed(1)}" font-family="'IBM Plex Sans',sans-serif" font-size="11" font-weight="500" stroke="white" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke" fill="#3AAA70">${i+1}</text>`);
     });
+  }
+
+  // Red dashed path and ring where jumps leave the stitched area (see findMovesOutsideDesign)
+  const outside = findMovesOutsideDesign(records);
+  if (outside) {
+    const pts = outside.path.map(([x, y]) => `${tx(x)},${ty(y)}`).join(' ');
+    L.push(`<polyline points="${pts}" fill="none" stroke="#D02828" stroke-width="1.6" stroke-dasharray="5,3"/>`);
+    const px = tx(outside.point.x), py = ty(outside.point.y);
+    L.push(`<circle cx="${px}" cy="${py}" r="7" fill="none" stroke="#D02828" stroke-width="2"/>`);
+    // The point sits on the drawing's edge (it sets the design's size), so the label goes inward.
+    const [lx, ly, anchor] = {
+      above: [0, 22, 'middle'], below: [0, -14, 'middle'], left: [12, 4, 'start'], right: [-12, 4, 'end'],
+    }[outside.side];
+    L.push(`<text x="${(parseFloat(px) + lx).toFixed(1)}" y="${(parseFloat(py) + ly).toFixed(1)}" text-anchor="${anchor}" font-family="'IBM Plex Sans',sans-serif" font-size="11" font-weight="600" stroke="white" stroke-width="2.5" stroke-linejoin="round" paint-order="stroke" fill="#D02828">${outside.outsideMm.toFixed(1)} mm outside the stitches</text>`);
   }
 
   L.push('</g>');
@@ -3390,6 +3406,21 @@ function runQualityAnalysis(records, filename, substrate, nonWearable, speedOver
     });
   }
 
+  // ── Design size: jumps that travel outside the stitched area ──────────────────────────────
+  const outside = findMovesOutsideDesign(records);
+  if (outside) {
+    report.findings.push({
+      severity: 'warning',
+      area: 'design size',
+      message: describeMovesOutside(outside),
+      estimatedImpact: (
+        `design measures ${outside.moveSize.w.toFixed(1)} × ${outside.moveSize.h.toFixed(1)} mm ` +
+        `instead of ${outside.stitchSize.w.toFixed(1)} × ${outside.stitchSize.h.toFixed(1)} mm`
+      ),
+    });
+  }
+  report.outsideMoves = outside;
+
   // ── Length & Density phase: §3 stitch length violations + §4a/4b/4c density/angle ────────
   const eventBuckets = bucketEventsByBlock(blocks, records);
 
@@ -3623,6 +3654,27 @@ function runQualityAnalysis(records, filename, substrate, nonWearable, speedOver
   report.limitations = LIMITATIONS;
 
   return report;
+}
+
+// One sentence-group for findMovesOutsideDesign()'s result, shared by the Quality finding and
+// the Overview note.
+function describeMovesOutside(o) {
+  const dist = `${o.outsideMm.toFixed(1)} mm ${o.side} the stitches`;
+  const jumps = `${fmt(o.jumpCount)} jump${o.jumpCount === 1 ? '' : 's'}`;
+  const what = o.where === 'end'
+    ? `The design ends ${dist}: the ${jumps} after the last stitch travel out to its end point.`
+    : o.where === 'start'
+      ? `The design starts ${dist}: the ${jumps} before the first stitch travel in from there.`
+      : `${jumps[0].toUpperCase() + jumps.slice(1)} near (${o.point.x.toFixed(1)}, ${o.point.y.toFixed(1)}) mm travel ${dist}.`;
+  const fix = o.where === 'end'
+    ? ' In the digitizing software, put the end point inside the design (for example at the start point) and export again.'
+    : o.where === 'start'
+      ? ' In the digitizing software, put the start point inside the design and export again.'
+      : '';
+  return `${what} Machines count every move in the design's size ` +
+    `(${o.moveSize.w.toFixed(1)} × ${o.moveSize.h.toFixed(1)} mm rather than the stitches' ` +
+    `${o.stitchSize.w.toFixed(1)} × ${o.stitchSize.h.toFixed(1)} mm), so one may say it won't fit a ` +
+    `hoop the stitches fit, and may show that point as a stray stitch.${fix}`;
 }
 
 // ── Reporting phase: §8/§9 — ranked findings + limitations ──────────────────────────────────
@@ -4101,6 +4153,11 @@ function showResults(result, moves, svgStr, qualityReport) {
   document.getElementById('tab-overview').classList.add('active');
 
   document.getElementById('statCards').innerHTML = renderStatCards(result);
+  const outsideNote = document.getElementById('outsideNote');
+  const outside = qualityReport && qualityReport.outsideMoves;
+  outsideNote.hidden = !outside;
+  outsideNote.className = outside ? 'quality-note outside-note' : '';
+  outsideNote.textContent = outside ? describeMovesOutside(outside) : '';
   document.getElementById('tableBadge').textContent = fmt(result.segments.length);
   document.getElementById('tableBody').innerHTML = renderTable(result.segments);
   document.getElementById('gridBody').innerHTML  = renderGrid(moves);

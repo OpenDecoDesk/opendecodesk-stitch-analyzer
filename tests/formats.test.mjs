@@ -112,3 +112,66 @@ test('DSZ records put the command byte last and have no end code', () => {
   assert.equal(ctrls.filter(c => c === 0x9B).length, 2);
   assert.notEqual(ctrls[ctrls.length - 1] & 0x1F, 0x18);
 });
+
+// DST records and the DSB records a Barudan wrote for them when it converted the DST itself:
+// one per direction (up/down × left/right, plus level moves), stitches and jumps.
+const BARUDAN_PAIRS = [
+  ['62a817', 'c02b35'], // stitch right, down
+  ['948a03', 'e00515'], // stitch left, down
+  ['586103', 'a00e06'], // stitch left, up
+  ['902103', '801303'], // stitch right, up
+  ['090103', 'a00005'], // stitch left, level
+  ['060003', '800008'], // stitch right, level
+  ['21aa97', 'c12a34'], // jump right, down
+  ['641a83', 'e11315'], // jump left, down
+  ['6519a3', 'a13e0e'], // jump left, up
+  ['6014a3', '813e1b'], // jump right, up
+];
+
+test('DSB moves match the ones a Barudan writes from a DST (Y points up, bit 0x40 = down)', () => {
+  for (const [dstHex, dsbHex] of BARUDAN_PAIRS) {
+    const d = F.decodeRecord(...fromHex(dstHex));
+    assert.equal(toHex(F.encodeDsbMoveRecord(d.dx, d.dy, d.is_jump)), dsbHex, `DST ${dstHex}`);
+    const b = F.decodeRecordDsb(...fromHex(dsbHex));
+    assert.deepEqual([Math.round(b.dx * 10), Math.round(b.dy * 10), b.is_jump],
+                     [Math.round(d.dx * 10), Math.round(d.dy * 10), d.is_jump], `DSB ${dsbHex}`);
+  }
+});
+
+test('DSZ uses the same directions as DSB: Y points up, bit 0x20 = down, bit 0x40 = left', () => {
+  assert.equal(toHex(F.encodeDszMoveRecord(-0.5, -1.2, false)), '0c05e0');
+  assert.equal(toHex(F.encodeDszMoveRecord(0.5, 1.2, true)), '0c0581');
+  const down = F.decodeRecordDsz(12, 5, 0xE0);
+  assert.deepEqual([Math.round(down.dx * 10), Math.round(down.dy * 10)], [-5, -12]);
+});
+
+// Records for findMovesOutsideDesign: moves in 0.1 mm units.
+const st = (x, y) => ({ dx: x / 10, dy: y / 10, is_jump: false, is_color_change: false });
+const jp = (x, y) => ({ dx: x / 10, dy: y / 10, is_jump: true, is_color_change: false });
+const square = [st(100, 0), st(0, 100), st(-100, 0), st(0, -100)];   // stitches 0..10 mm each way
+
+test('jumps after the last stitch that end outside the stitches are found', () => {
+  // Like the Santa export: the end point sits above the design, reached by jumps after the last stitch.
+  const o = F.findMovesOutsideDesign([...square, jp(20, 60), jp(20, 60), { is_explicit_trim: true, dx: 0, dy: 0 }, jp(10, 12)]);
+  assert.equal(o.where, 'end');
+  assert.equal(o.side, 'above');
+  assert.equal(o.outsideMm, 3.2);
+  assert.equal(o.jumpCount, 3);
+  assert.deepEqual({ ...o.point }, { x: 5, y: 13.2 });
+  assert.deepEqual({ ...o.stitchSize }, { w: 10, h: 10 });
+  assert.deepEqual({ ...o.moveSize }, { w: 10, h: 13.2 });
+  assert.deepEqual(Array.from(o.path, p => Array.from(p)), [[0, 0], [2, 6], [4, 12], [5, 13.2]]);
+});
+
+test('jumps that stay inside the stitches, or stray less than 1 mm, are not reported', () => {
+  assert.equal(F.findMovesOutsideDesign([...square, jp(50, 50)]), null);
+  assert.equal(F.findMovesOutsideDesign([...square, jp(-9, 0)]), null);
+  assert.equal(F.findMovesOutsideDesign([jp(5, 5)]), null);
+});
+
+test('the farthest run is reported, and whether it is at the start, middle or end', () => {
+  const start = F.findMovesOutsideDesign([jp(0, -40), jp(0, 40), ...square]);
+  assert.deepEqual([start.where, start.side, start.outsideMm, start.jumpCount], ['start', 'below', 4, 2]);
+  const middle = F.findMovesOutsideDesign([...square, jp(-30, 0), jp(30, 0), st(5, 5), jp(0, 120), st(0, -120)]);
+  assert.deepEqual([middle.where, middle.side, middle.outsideMm], ['middle', 'left', 3]);
+});
