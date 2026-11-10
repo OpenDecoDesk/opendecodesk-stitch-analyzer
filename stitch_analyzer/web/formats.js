@@ -73,7 +73,10 @@ function loadDstBytes(arrayBuffer) {
 
 // ── DSB (Barudan) Parsing ─────────────────────────────────────────────────────
 // Record layout: [ctrl, y_raw, x_raw]
-// y = -y_raw by default; bit 0x40 in ctrl negates y again (→ positive); bit 0x20 negates x.
+// Bit 0x40 in ctrl makes y negative (down); bit 0x20 makes x negative (left). Y points up, as in DST.
+// pyembroidery's reader starts from y = -y_raw because it keeps Y pointing down; this code keeps Y up,
+// so it doesn't. Checked against DSBs a Barudan wrote itself from DSTs: they carry 0x40 on every
+// record that moves down.
 // lo5 == 0 → stitch, lo5 == 1 → jump/move; special ctrl bytes: E7=trim E8=stop E9-F7=needle F8=end.
 function decodeRecordDsb(ctrl, y_raw, x_raw) {
   if (ctrl === 0xF8) return { is_end:true };
@@ -83,7 +86,7 @@ function decodeRecordDsb(ctrl, y_raw, x_raw) {
   const lo5 = ctrl & 0x1F;
   if (lo5 !== 0 && lo5 !== 1) return null;  // uncaught control byte — stop decoding
   let x = x_raw;
-  let y = -y_raw;
+  let y = y_raw;
   if (ctrl & 0x40) y = -y;
   if (ctrl & 0x20) x = -x;
   return { dx:x*UNIT_TO_MM, dy:y*UNIT_TO_MM, is_jump:lo5===1, is_color_change:false, is_explicit_trim:false, is_explicit_stop:false, needle_no:null, is_end:false };
@@ -91,7 +94,8 @@ function decodeRecordDsb(ctrl, y_raw, x_raw) {
 
 // ── DSZ (ZSK) Parsing ────────────────────────────────────────────────────────
 // Layout per pyembroidery's DszReader (no official spec): [y_raw, x_raw, ctrl].
-// y = -y_raw by default; bit 0x20 negates y again; bit 0x40 negates x.
+// Bit 0x20 makes y negative (down); bit 0x40 makes x negative (left). Y points up, as in DST; like DSB,
+// pyembroidery's y = -y_raw is left out because it keeps Y pointing down.
 // lo5 == 0 → stitch, lo5 == 1 → jump; 0x82=stop 0x9B=trim 0x83-0x9A=needle (two codes per needle).
 // No end code is defined — the stream runs to end of file.
 const DSZ_STOP = 0x82, DSZ_TRIM = 0x9B, DSZ_NEEDLE_BASE = 0x83, DSZ_MAX_NEEDLE = 12;
@@ -99,7 +103,7 @@ function decodeRecordDsz(y_raw, x_raw, ctrl) {
   const lo5 = ctrl & 0x1F;
   if (lo5 === 0 || lo5 === 1) {
     let x = x_raw;
-    let y = -y_raw;
+    let y = y_raw;
     if (ctrl & 0x40) x = -x;
     if (ctrl & 0x20) y = -y;
     return { dx:x*UNIT_TO_MM, dy:y*UNIT_TO_MM, is_jump:lo5===1, is_color_change:false, is_explicit_trim:false, is_explicit_stop:false, needle_no:null, is_end:false };
@@ -162,6 +166,75 @@ function buildColorToNeedle(header, records) {
     }
   }
   return map;
+}
+
+// ── Moves outside the stitched area ──────────────────────────────────────────
+// Jumps that travel beyond the area the stitches cover still count toward the design's size:
+// headers (+X/-X/+Y/-Y) and machines measure every move. So a machine may say a design won't fit
+// a hoop its stitches would fit, and may draw the far point as a stray stitch. The usual cause is
+// the end point set in the digitizing software sitting outside the design, so the jumps after the
+// last stitch travel out to it.
+const OUTSIDE_MIN_MM = 1.0;
+
+// Returns null when every jump stays within OUTSIDE_MIN_MM of the stitched area. Otherwise the
+// jump run that goes farthest out: {outsideMm, side ('above'|'below'|'left'|'right'), point {x,y},
+// jumpCount, where ('end'|'start'|'middle'), path [[x,y], …] from the stitch before the run to
+// its last jump, stitchSize and moveSize {w,h}}. Positions in mm, Y up, start of design = 0,0.
+function findMovesOutsideDesign(records) {
+  // Work in 0.1 mm units so long runs of decimals don't drift.
+  let x = 0, y = 0;
+  const pts = [];                       // [x, y, isStitch] after each move record
+  for (const r of records) {
+    if (r.is_color_change || r.is_explicit_trim || r.is_explicit_stop) continue;
+    x += Math.round(r.dx / UNIT_TO_MM);
+    y += Math.round(r.dy / UNIT_TO_MM);
+    pts.push([x, y, !r.is_jump]);
+  }
+  const stitches = pts.filter(p => p[2]);
+  if (!stitches.length) return null;
+  const box = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+  for (const [px, py] of stitches) {
+    box.x0 = Math.min(box.x0, px); box.x1 = Math.max(box.x1, px);
+    box.y0 = Math.min(box.y0, py); box.y1 = Math.max(box.y1, py);
+  }
+  const all = { x0: Math.min(box.x0, 0), x1: Math.max(box.x1, 0), y0: Math.min(box.y0, 0), y1: Math.max(box.y1, 0) };
+  for (const [px, py] of pts) {
+    all.x0 = Math.min(all.x0, px); all.x1 = Math.max(all.x1, px);
+    all.y0 = Math.min(all.y0, py); all.y1 = Math.max(all.y1, py);
+  }
+  const outside = (px, py) => [
+    [py - box.y1, 'above'], [box.y0 - py, 'below'], [box.x0 - px, 'left'], [px - box.x1, 'right'],
+  ].reduce((a, b) => (b[0] > a[0] ? b : a));
+
+  let worst = null;
+  for (let i = 0; i < pts.length; ) {
+    if (pts[i][2]) { i++; continue; }
+    let j = i;                          // the run is pts[i..j-1]
+    let far = null;
+    for (; j < pts.length && !pts[j][2]; j++) {
+      const [d, side] = outside(pts[j][0], pts[j][1]);
+      if (!far || d > far.d) far = { d, side, at: j };
+    }
+    if (!worst || far.d > worst.d) worst = { ...far, from: i, to: j };
+    i = j;
+  }
+  if (!worst || worst.d * UNIT_TO_MM < OUTSIDE_MIN_MM) return null;
+
+  const mm = v => Math.round(v) / Math.round(1 / UNIT_TO_MM);
+  const path = [];
+  const before = worst.from > 0 ? pts[worst.from - 1] : [0, 0];
+  path.push([mm(before[0]), mm(before[1])]);
+  for (let k = worst.from; k < worst.to; k++) path.push([mm(pts[k][0]), mm(pts[k][1])]);
+  return {
+    outsideMm: mm(worst.d),
+    side: worst.side,
+    point: { x: mm(pts[worst.at][0]), y: mm(pts[worst.at][1]) },
+    jumpCount: worst.to - worst.from,
+    where: worst.to === pts.length ? 'end' : worst.from === 0 ? 'start' : 'middle',
+    path,
+    stitchSize: { w: mm(box.x1 - box.x0), h: mm(box.y1 - box.y0) },
+    moveSize: { w: mm(all.x1 - all.x0), h: mm(all.y1 - all.y0) },
+  };
 }
 
 // ── DST/DSB Conversion ────────────────────────────────────────────────────────
@@ -285,27 +358,27 @@ function _dstRecord(xu, yu, type) {
 }
 
 // Encode one DSB move record. dx/dy in mm. Returns Uint8Array(3).
-// ctrl: bit 7 always set; bit 6 = +Y; bit 5 = -X; bit 0 = jump (needle up), clear = stitch.
+// ctrl: bit 7 always set; bit 6 = -Y (down); bit 5 = -X (left); bit 0 = jump (needle up), clear = stitch.
 function encodeDsbMoveRecord(dx_mm, dy_mm, is_jump) {
   const MM_TO_UNIT = 1 / UNIT_TO_MM;
   const xu = Math.round(dx_mm * MM_TO_UNIT);
   const yu = Math.round(dy_mm * MM_TO_UNIT);
   let ctrl = 0x80;
   if (xu < 0) ctrl |= 0x20;
-  if (yu > 0) ctrl |= 0x40;
+  if (yu < 0) ctrl |= 0x40;
   if (is_jump) ctrl |= 0x01;
   return new Uint8Array([ctrl, Math.abs(yu) & 0xFF, Math.abs(xu) & 0xFF]);
 }
 
 // Encode one DSZ move record: [y_raw, x_raw, ctrl]. Mirrors decodeRecordDsz.
-// ctrl: bit 7 set (as on every DSZ command code); bit 5 = +Y; bit 6 = -X; bit 0 = jump.
+// ctrl: bit 7 set (as on every DSZ command code); bit 5 = -Y (down); bit 6 = -X (left); bit 0 = jump.
 function encodeDszMoveRecord(dx_mm, dy_mm, is_jump) {
   const MM_TO_UNIT = 1 / UNIT_TO_MM;
   const xu = Math.round(dx_mm * MM_TO_UNIT);
   const yu = Math.round(dy_mm * MM_TO_UNIT);
   let ctrl = 0x80;
   if (xu < 0) ctrl |= 0x40;
-  if (yu > 0) ctrl |= 0x20;
+  if (yu < 0) ctrl |= 0x20;
   if (is_jump) ctrl |= 0x01;
   return new Uint8Array([Math.abs(yu) & 0xFF, Math.abs(xu) & 0xFF, ctrl]);
 }

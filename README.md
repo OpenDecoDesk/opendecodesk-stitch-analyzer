@@ -10,6 +10,9 @@ runs on your computer: files never leave it, and it works with no internet conne
 - **Threshold grid:** how many stitches are over each length from 5 to 40 mm.
 - **Quality:** stitch lengths by stitch type, satin and fill density, fill angle, layering (where
   stitches pile up), and a run-time estimate, with the biggest issues ranked first.
+- **Design size:** jumps that travel outside the stitches, such as an end point left above the
+  design, are marked in red on the preview with a note. Machines count those moves in the design's
+  size, so one can refuse a hoop the stitches fit or show the far point as a stray stitch.
 - **Compare:** load a second design to see what changed between two versions.
 - **Convert:**
   - **DST → DSB** (Barudan) and **DST → DSZ** (ZSK), with a **needle map** (which needle each color
@@ -25,9 +28,10 @@ a converted file, the layering heatmap) asks where to put it.
 ### What's checked and what isn't
 | | |
 |---|---|
-| DST → DSB | ✅ run on a Barudan, stops honored. Trim before stop and needle changes are checked in software (read back and compared), not yet on a machine |
+| DST → DSB | ✅ run on a Barudan, stops honored. Every move matches, byte for byte, the DSB a Barudan writes when it converts the same DST itself. Trim before stop and needle changes are checked in software (read back and compared), not yet on a machine |
+| DSB direction | Y points up, as in DST: bit 0x40 marks a move down, bit 0x20 a move left. Checked against DSBs a Barudan wrote from DSTs (versions before this check read and wrote DSB upside down) |
 | DSB → DST | checked in software only |
-| DST → DSZ | ⚠️ written from the only public description of the format ([pyembroidery](https://github.com/EmbroidePy/pyembroidery)'s DSZ reader) and not yet tried on a ZSK — run a short test design first. Three details are best guesses: there's no end-of-design code, needles are numbered 1 = 0x83, 2 = 0x85 … 12 = 0x99, and every record sets the top bit. A DSZ saved by other software would settle them; please open an issue with one. |
+| DST → DSZ | ⚠️ written from the only public description of the format ([pyembroidery](https://github.com/EmbroidePy/pyembroidery)'s DSZ reader) and not yet tried on a ZSK — run a short test design first. Four details are best guesses: bit 0x20 marks a move down, read the same way as DSB's 0x40, whose direction a Barudan confirmed, there's no end-of-design code, needles are numbered 1 = 0x83, 2 = 0x85 … 12 = 0x99, and every record sets the top bit. A DSZ saved by other software would settle them; please open an issue with one. |
 | DSZ supports needles 1–12, DSB 1–15 | picking a higher needle shows an error instead of saving |
 
 ## Download
