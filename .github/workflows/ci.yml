@@ -36,7 +36,7 @@ jobs:
       - name: Python tests
         run: python -m unittest discover -s tests -t . -v
       - name: Format tests
-        run: node --test tests/formats.test.mjs
+        run: node --test tests/formats.test.mjs tests/svg.test.mjs
 
   version:
     # The version the apps are built with. For a release (run by hand on main with "Publish a release"
