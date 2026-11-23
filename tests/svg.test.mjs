@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const root = new URL('..', import.meta.url);
-const read = p => readFileSync(new URL(p, root), 'utf8');
+// A Windows checkout may have CRLF line endings, which the patterns below would otherwise miss.
+const read = p => readFileSync(new URL(p, root), 'utf8').replace(/\r\n/g, '\n');
 const F = vm.createContext({ TextDecoder, TextEncoder, atob, btoa });
 vm.runInContext(read('stitch_analyzer/web/formats.js'), F, { filename: 'formats.js' });
 
