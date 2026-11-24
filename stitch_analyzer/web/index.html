@@ -3305,20 +3305,24 @@ function analyzeSpeed(blocks, eventBuckets, thresholds, satinDensity) {
 }
 
 // ── §6 Speed calibration (predicted-vs-actual suggestion) ───────────────────────
-// Mirrors dst_analyzer.py's compute_speed_calibration (~3068-3131). Computes a predicted-vs-actual
-// runtime comparison plus a SIMPLE, clearly-labeled SUGGESTION for closing the gap — never an
-// exact calibration solve. Two suggestion styles are computed:
-//   - scale machineSpeedSpm by the predicted/actual ratio (closes a proportional, whole-model gap)
-//   - or, if the gap looks more like under-counted flat overhead, what a trimSeconds/ccSeconds
-//     increase of a given size (spread evenly over the trims+CCs actually found in this file)
-//     would need to be to explain the same gap.
-// Which one is the better explanation is left to the operator's judgment.
+// Compares the predicted runtime with an observed stitch-out and works out two separate ways to
+// close the gap. Each one closes the whole gap on its own; which is the better explanation is left
+// to the operator.
+//   - Max speed: every stitch's achievable SPM is a fraction of the ceiling (analyzeSpeed), so
+//     stitching time scales exactly with 1/ceiling while trim/CC time doesn't change at all. The
+//     ceiling that makes the stitching portion fit into (actual − trim/CC time) is therefore
+//     ceiling × stitchingSeconds / (actualSeconds − overheadSeconds). If trim/CC time alone is
+//     already longer than the real stitch-out, no speed can close the gap.
+//   - Trim/CC time: the gap spread evenly over the file's trims + color changes, added to (or taken
+//     off) both the trim and the CC time. If that would push either below zero, trim/CC time
+//     can't explain the gap by itself.
 function computeSpeedCalibration(report, actualMinutes) {
   const sp = report.speed;
   const predictedMinutes = sp.totalMinutes;
-  const deltaMinutes = predictedMinutes - actualMinutes;
+  const deltaMinutes = predictedMinutes - actualMinutes;   // > 0: estimate too long (model too slow)
   const deltaPct = actualMinutes ? (100.0 * deltaMinutes / actualMinutes) : 0.0;
   const trimCcN = sp.trimCount + sp.ccCount;
+  const overheadSeconds = sp.trimOverheadSeconds + sp.ccOverheadSeconds;
 
   const result = {
     actualMinutes,
@@ -3327,28 +3331,30 @@ function computeSpeedCalibration(report, actualMinutes) {
     deltaPct,
     withinTolerance:            Math.abs(deltaPct) < 5.0,
     trimCcEventCount:           trimCcN,
-    machineSpeedRatio:          null,
-    suggestedMachineSpeedSpm:   null,
-    perEventDeltaSeconds:       null,
+    stitchingMinutes:           sp.stitchingSeconds / 60.0,
+    overheadMinutes:            overheadSeconds / 60.0,
+    targetStitchingMinutes:     null,  // stitching time that would make the total match the actual
+    suggestedMachineSpeedSpm:   null,  // null: trim/CC time alone is longer than the real stitch-out
+    perEventChangeSeconds:      null,  // added to every trim and CC; negative means take time off
     suggestedTrimSeconds:       null,
     suggestedCcSeconds:         null,
+    overheadCanCloseGap:        false,
   };
   if (result.withinTolerance) return result;
 
   const actualSeconds = actualMinutes * 60.0;
-  const ratio = sp.totalSeconds > 0 ? (actualSeconds / sp.totalSeconds) : 1.0;
-  result.machineSpeedRatio        = ratio;
-  result.suggestedMachineSpeedSpm = sp.machineSpeedSpm * ratio;
+  const targetStitchingSeconds = actualSeconds - overheadSeconds;
+  if (targetStitchingSeconds > 0 && sp.stitchingSeconds > 0) {
+    result.targetStitchingMinutes   = targetStitchingSeconds / 60.0;
+    result.suggestedMachineSpeedSpm = sp.machineSpeedSpm * sp.stitchingSeconds / targetStitchingSeconds;
+  }
 
   if (trimCcN > 0) {
-    const gapSeconds     = Math.abs(deltaMinutes) * 60.0;
-    const perEventDelta  = gapSeconds / trimCcN;
-    // Predicted faster than actual (delta < 0) → overhead looks UNDER-counted → add seconds/event.
-    // Predicted slower than actual (delta > 0) → overhead looks OVER-counted → subtract instead.
-    const signedDelta = deltaMinutes < 0 ? perEventDelta : -perEventDelta;
-    result.perEventDeltaSeconds = signedDelta;
-    result.suggestedTrimSeconds = Math.max(0.0, sp.trimSecondsEach + signedDelta);
-    result.suggestedCcSeconds   = Math.max(0.0, sp.ccSecondsEach + signedDelta);
+    const change = (actualSeconds - sp.totalSeconds) / trimCcN;
+    result.perEventChangeSeconds = change;
+    result.suggestedTrimSeconds  = sp.trimSecondsEach + change;
+    result.suggestedCcSeconds    = sp.ccSecondsEach + change;
+    result.overheadCanCloseGap   = result.suggestedTrimSeconds >= 0 && result.suggestedCcSeconds >= 0;
   }
 
   return result;
@@ -4747,11 +4753,11 @@ function renderSpeedPenaltyRows(speed) {
   </tr>`).join('');
 }
 
-// Renders `report.calibration` (populated by the Calibrate button via computeSpeedCalibration())
-// — mirrors dst_analyzer.py's print_speed_calibration (~3133-3166): predicted vs. actual, the
-// delta, and — outside the ~5% tolerance band — both suggestion styles, clearly labeled as a
-// heuristic rather than an exact solve.
+// Renders `report.calibration` (populated by the Calibrate button via computeSpeedCalibration()):
+// predicted vs. actual, and — outside the ~5% tolerance band — the two separate ways to close the
+// gap, each stated as a concrete before → after setting.
 function renderCalibrationResult(c, speed) {
+  const mins = m => `${m.toFixed(1)} min`;
   let html = `<div class="quality-totals" style="margin-top:14px">
     Predicted: <strong>${c.predictedMinutes.toFixed(2)} min</strong> &middot;
     Actual: <strong>${c.actualMinutes.toFixed(2)} min</strong> &middot;
@@ -4763,17 +4769,42 @@ function renderCalibrationResult(c, speed) {
     return html;
   }
 
-  const direction = c.deltaMinutes < 0 ? 'faster than actual' : 'slower than actual';
+  const tooLong = c.deltaMinutes > 0;
+  const gap = mins(Math.abs(c.deltaMinutes));
   html += `<div class="quality-note quality-note-warn">
-    <div style="margin-bottom:8px">Predicted is <strong>${direction}</strong>. Two possible adjustments — pick whichever fits, this is a heuristic, not a fit:</div>
-    <div${c.trimCcEventCount > 0 ? ' style="margin-bottom:6px"' : ''}>
-      1. Scale the machine speed ceiling by the ratio (<strong>${c.machineSpeedRatio.toFixed(3)}x</strong>) it would take to close the whole gap: try <strong>${c.suggestedMachineSpeedSpm.toFixed(0)} SPM</strong>
+    <div style="margin-bottom:8px">The estimate is <strong>${gap} ${tooLong ? 'longer' : 'shorter'}</strong> than the real stitch-out, so the model is too ${tooLong ? 'slow' : 'fast'}. ${
+      (c.suggestedMachineSpeedSpm !== null || c.overheadCanCloseGap)
+        ? 'Each change below closes the gap by itself &mdash; pick the one that fits:'
+        : 'Neither setting can close a gap this size by itself &mdash; check the time you entered.'}</div>`;
+
+  // 1. Max speed
+  const oldSpm = gfmt(speed.machineSpeedSpm);
+  if (c.suggestedMachineSpeedSpm !== null) {
+    html += `<div style="margin-bottom:6px">
+      1. ${tooLong ? 'Raise' : 'Lower'} Max speed from ${oldSpm} to <strong>${c.suggestedMachineSpeedSpm.toFixed(0)} SPM</strong>.
+      Stitching time goes from ${mins(c.stitchingMinutes)} to ${mins(c.targetStitchingMinutes)}; the ${mins(c.overheadMinutes)} of trim/color-change time stays the same.
     </div>`;
+  } else {
+    html += `<div style="margin-bottom:6px">
+      1. Max speed can't explain it: trim/color-change time alone is ${mins(c.overheadMinutes)}, already at or past the real ${mins(c.actualMinutes)}.
+    </div>`;
+  }
+
+  // 2. Trim / color-change time
   if (c.trimCcEventCount > 0) {
-    const sign = c.deltaMinutes < 0 ? '+' : '-';
-    html += `<div>
-      2. Or, if the gap is really under/over-counted overhead: this file has ${fmt(speed.trimCount)} trims + ${fmt(speed.ccCount)} color changes = ${fmt(c.trimCcEventCount)} events; spreading the gap evenly over just those needs about ${sign}${Math.abs(c.perEventDeltaSeconds).toFixed(1)}s more per event, e.g. trim &asymp; <strong>${c.suggestedTrimSeconds.toFixed(1)}s</strong> and/or CC &asymp; <strong>${c.suggestedCcSeconds.toFixed(1)}s</strong>
-    </div>`;
+    const per = Math.abs(c.perEventChangeSeconds).toFixed(1);
+    const events = `${fmt(speed.trimCount)} trims + ${fmt(speed.ccCount)} color changes = ${fmt(c.trimCcEventCount)} events`;
+    if (c.overheadCanCloseGap) {
+      html += `<div>
+        2. Or ${tooLong ? 'take' : 'add'} ${per} s ${tooLong ? 'off' : 'to'} every trim and color change (${events}):
+        trim ${speed.trimSecondsEach.toFixed(1)} s &rarr; <strong>${c.suggestedTrimSeconds.toFixed(1)} s</strong> and
+        CC ${speed.ccSecondsEach.toFixed(1)} s &rarr; <strong>${c.suggestedCcSeconds.toFixed(1)} s</strong>.
+      </div>`;
+    } else {
+      html += `<div>
+        2. Trim/color-change time can't explain it: spreading ${gap} over ${events} would need ${per} s off each, which takes trim or CC time below zero.
+      </div>`;
+    }
   }
   html += `</div>`;
   return html;

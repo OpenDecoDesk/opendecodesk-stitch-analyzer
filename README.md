@@ -60,7 +60,7 @@ downloads the file instead of asking where to put it.
 ## Tests
 ```bash
 python3 -m unittest discover -s tests -t . -v
-node --test tests/formats.test.mjs
+node --test tests/formats.test.mjs tests/svg.test.mjs tests/calibration.test.mjs
 ```
 - `tests/test_app.py` — the desktop shell: saving through the dialog, where settings live, the port,
   the self-test, the version in the title bar and the page's header, and that the bundled page needs
@@ -69,6 +69,9 @@ node --test tests/formats.test.mjs
 - `tests/formats.test.mjs` — the DST, DSB and DSZ code in `stitch_analyzer/web/formats.js`, run in
   Node (22 or newer, no packages): converted files are compared byte for byte with recorded ones
   (`tests/fixtures/conversions.json`) and read back to check every stitch is where it was.
+- `tests/svg.test.mjs` — the drawing's SVG export is well-formed XML.
+- `tests/calibration.test.mjs` — each Calibrate suggestion (a new Max speed, or new trim and
+  color-change times), fed back into the speed model, gives the stitch-out time that was entered.
 
 `python3 -m stitch_analyzer --self-test` opens the real window, checks the page, the format code and
 the save bridge all loaded, and exits 0 if they did. CI runs it on each built app.
