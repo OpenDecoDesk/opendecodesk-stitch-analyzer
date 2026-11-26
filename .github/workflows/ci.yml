@@ -127,7 +127,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'NOTES'
-          **New:** opens about 25 more embroidery formats besides DST, DSB and DSZ: Brother .PES/.PEC, Janome .JEF, Melco .EXP, Pfaff and Viking .VP3, .HUS and .PCS, Singer .XXX, Barudan .U01, Tajima .TBF, Toyota .10O and others, with the thread colors the file names. Any of them converts to DST.
+          **New:** opens about 40 more embroidery formats besides DST, DSB and DSZ: Brother .PES/.PEC, Janome .JEF, Melco .EXP, Pfaff and Viking .VP3, .HUS and .PCS, Singer .XXX, Barudan .U01, Tajima .TBF, Toyota .10O, Zeng Hsing .ZHS and others, with the thread colors the file names, and .EDR, .COL and .INF thread color files. Any of them converts to DST, DSB or DSZ.
 
           Analyze embroidery designs, and convert Tajima .DST, Barudan .DSB and ZSK .DSZ between each other.
 

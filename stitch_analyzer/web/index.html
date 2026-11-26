@@ -3800,11 +3800,11 @@ const LIMITATIONS = [
   "Fabric/substrate intent: the correct length/density thresholds depend on the target fabric, " +
   "which a machine file never records — that is exactly why Substrate is a required judgment call " +
   "the user makes, not something this tool infers from the file.",
-  "Trim-detection heuristic: DST and TAP have no trim command, so this tool treats 3+ consecutive " +
-  "jump records as an implied thread trim — the standard Tajima convention — but some machines/" +
-  "software interpret the jump-run-length trim rule slightly differently. JEF, SEW, PCS, PCM, INB, " +
-  "NEW and SHV have no trim command either; for those a jump of more than 3 mm counts as a trim, " +
-  "as pyembroidery reads them.",
+  "Trim-detection heuristic: DST, TAP and EXY have no trim command, so this tool treats 3+ " +
+  "consecutive jump records as an implied thread trim — the standard Tajima convention — but some " +
+  "machines/software interpret the jump-run-length trim rule slightly differently. JEF, JPX, SEW, " +
+  "PCS, PCM, PCD, PCQ, INB, NEW, SHV, 100, BRO, MIT, STC, ZHS and ZXY have no trim command either; " +
+  "for those a jump of more than 3 mm counts as a trim, as pyembroidery reads them.",
 ];
 
 // ── Compare phase: §7 — flatten + diff two QualityReports ───────────────────
@@ -4028,7 +4028,11 @@ const fileInput = document.getElementById('fileInput');
   const exts = readableExtensions();
   const accept = exts.flatMap(e => [`.${e}`, `.${e.toUpperCase()}`]).join(',');
   document.querySelectorAll('.design-file-input').forEach(inp => { inp.accept = accept; });
-  document.getElementById('formatList').textContent = 'Opens ' + exts.map(e => '.' + e).join(' ');
+  // The main picker also takes a thread color file, to color the design that's open.
+  const colors = StitchReaders.colorExts;
+  fileInput.accept = accept + ',' + colors.flatMap(e => [`.${e}`, `.${e.toUpperCase()}`]).join(',');
+  document.getElementById('formatList').textContent = 'Opens ' + exts.map(e => '.' + e).join(' ') +
+    '. Thread colors from ' + colors.map(e => '.' + e).join(' ') + ', dropped after the design.';
 })();
 
 function formatBytes(n) {
@@ -4039,12 +4043,33 @@ function formatBytes(n) {
 
 function handleFile(file) {
   if (!file) return;
+  const ext = file.name.includes('.') ? file.name.split('.').pop() : '';
+  if (StitchReaders.isColorFile(ext)) { applyColorFile(file, ext); return; }
   currentFile = file;
   document.getElementById('fileBadge').classList.add('show');
   document.getElementById('fileBadgeName').textContent = file.name;
   document.getElementById('fileBadgeSize').textContent = formatBytes(file.size);
   document.getElementById('analyzeBtn').disabled = false;
   setStatus('File loaded — click Analyze', '');
+}
+
+// A thread color file (.edr, .col, .inf) lists the design's threads in sewing order, one per color change, the
+// way a DST's TC: lines do. It colors the design that's open and turns Thread colors on.
+async function applyColorFile(file, ext) {
+  if (!storedHeader || !storedRecords) {
+    setStatus(`Open the design first, then drop its .${ext.toLowerCase()} file to color it`, 'error');
+    return;
+  }
+  try {
+    const threads = StitchReaders.readColors(await file.arrayBuffer(), ext);
+    storedHeader.file_colors = threads;
+    const toggle = document.getElementById('threadColors');
+    if (!toggle.checked) { toggle.checked = true; saveConfig(); }
+    runWithRecords(storedHeader, storedRecords);
+    setStatus(`Thread colors from ${file.name}: ${threads.length} thread${threads.length !== 1 ? 's' : ''}`, 'ready');
+  } catch (err) {
+    setStatus('Error: ' + err.message, 'error');
+  }
 }
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
