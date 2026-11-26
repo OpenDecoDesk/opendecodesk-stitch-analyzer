@@ -1236,8 +1236,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     </div>
 
     <div class="sidebar-section" id="needleMapSection" style="display:none">
-      <div class="ctrl-label" style="margin-bottom:4px">Needle Map <span style="font-size:10px;opacity:0.6;text-transform:none;letter-spacing:0">&nbsp;DST → DSB / DSZ</span></div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Which needle each color change goes to. DSZ supports needles 1–12.</div>
+      <div class="ctrl-label" style="margin-bottom:4px">Needle Map <span style="font-size:10px;opacity:0.6;text-transform:none;letter-spacing:0">&nbsp;→ DSB / DSZ</span></div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Which needle each color change goes to when converting to DSB or DSZ. It starts from the needles the file names, if it names any. DSZ supports needles 1–12.</div>
       <div id="needleMapRows" style="display:flex;flex-direction:column;gap:7px;max-height:260px;overflow-y:auto"></div>
       <label style="display:flex;align-items:center;gap:7px;margin-top:10px;font-size:12px;color:var(--text);cursor:pointer">
         <input type="checkbox" id="trimBeforeStopChk" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer">
@@ -1308,11 +1308,15 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Download
               </button>
-              <button class="icon-btn" id="convertFmtBtn" title="Convert format" style="display:none">
+              <button class="icon-btn convert-btn" data-format="dst" title="Convert to Tajima DST" style="display:none">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-                <span id="convertFmtLabel">Convert to DSB</span>
+                Convert to DST
               </button>
-              <button class="icon-btn" id="convertDszBtn" title="Convert to ZSK DSZ format" style="display:none">
+              <button class="icon-btn convert-btn" data-format="dsb" title="Convert to Barudan DSB, with the needle map" style="display:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                Convert to DSB
+              </button>
+              <button class="icon-btn convert-btn" data-format="dsz" title="Convert to ZSK DSZ, with the needle map" style="display:none">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
                 Convert to DSZ
               </button>
@@ -5010,7 +5014,7 @@ document.getElementById('downloadSvgBtn').addEventListener('click', () => {
   saveDownload(filename, new TextEncoder().encode(currentSvg));
 });
 
-// ── Needle mapping UI (DST→DSB only) ─────────────────────────────────────────
+// ── Needle mapping UI (for converting to DSB or DSZ) ─────────────────────────
 // Rows: index 0 = starting thread (emitted as an initial needle change in DSB),
 //        index 1..n = each real color change.
 // COLOR_PALETTE is defined later in the file; reference it by name at call time.
@@ -5018,8 +5022,9 @@ function buildNeedleMapUI(colorChangeCount) {
   const section = document.getElementById('needleMapSection');
   const rows    = document.getElementById('needleMapRows');
   rows.innerHTML = '';
-  // Show the section even with 0 color changes — the start needle still applies.
-  if (storedHeader && !hasExplicitCommands(storedHeader)) {
+  // Show the section even with 0 color changes — the start needle still applies. Every design can go to DSB or
+  // DSZ (a DSB to DSZ, a DSZ to DSB), so it shows whenever one is open.
+  if (storedHeader) {
     section.style.display = '';
   } else {
     section.style.display = 'none';
@@ -5044,11 +5049,14 @@ function buildNeedleMapUI(colorChangeCount) {
     const sel = document.createElement('select');
     sel.id        = `needleMapSel_${i}`;
     sel.className = 'ctrl-select';
+    // Default: the needle the file names for this block (DSB, DSZ, U01 …), else Start→1, Change1→2, etc.
+    const named = storedColorToNeedle[i];
+    const wanted = named != null && named >= 1 && named <= 15 ? named : Math.min(i + 1, 15);
     for (let n = 1; n <= 15; n++) {
       const opt = document.createElement('option');
       opt.value       = n;
       opt.textContent = `Needle ${n}`;
-      if (n === i + 1) opt.selected = true;  // default: Start→1, Change1→2, etc.
+      if (n === wanted) opt.selected = true;
       sel.appendChild(opt);
     }
 
@@ -5071,22 +5079,13 @@ function getNeedleMap() {
 }
 
 // ── Convert format button ────────────────────────────────────────────────────
+// Any design converts to DST, DSB and DSZ, except to its own format.
 function updateConvertBtn() {
-  const btn    = document.getElementById('convertFmtBtn');
-  const dszBtn = document.getElementById('convertDszBtn');
-  const label  = document.getElementById('convertFmtLabel');
-  if (!storedHeader) { btn.style.display = 'none'; dszBtn.style.display = 'none'; buildNeedleMapUI(0); return; }
-  btn.style.display = '';
-  if (hasExplicitCommands(storedHeader)) {
-    label.textContent = 'Convert to DST';
-    dszBtn.style.display = 'none';
-    buildNeedleMapUI(0); // no needle mapping for DSB/DSZ→DST
-  } else {
-    label.textContent = 'Convert to DSB';
-    dszBtn.style.display = '';
-    const co = storedHeader.color_changes >= 0 ? storedHeader.color_changes : 0;
-    buildNeedleMapUI(co);
-  }
+  const from = storedHeader ? storedHeader.format : null;
+  document.querySelectorAll('.convert-btn').forEach(btn => {
+    btn.style.display = storedHeader && btn.dataset.format !== from ? '' : 'none';
+  });
+  buildNeedleMapUI(storedHeader ? countColorChanges(storedHeader, storedRecords) : 0);
 }
 
 function exportConverted(targetFormat) {
@@ -5107,11 +5106,9 @@ function exportConverted(targetFormat) {
   saveDownload(`${base}.${targetFormat}`, bytes);
 }
 
-document.getElementById('convertFmtBtn').addEventListener('click', () => {
-  if (!storedHeader) return;
-  exportConverted(hasExplicitCommands(storedHeader) ? 'dst' : 'dsb');
+document.querySelectorAll('.convert-btn').forEach(btn => {
+  btn.addEventListener('click', () => exportConverted(btn.dataset.format));
 });
-document.getElementById('convertDszBtn').addEventListener('click', () => exportConverted('dsz'));
 
 // ── Layering heatmap actions ─────────────────────────────────────────────────
 document.getElementById('downloadHeatmapBtn').addEventListener('click', () => {

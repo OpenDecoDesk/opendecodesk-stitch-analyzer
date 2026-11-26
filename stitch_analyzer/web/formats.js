@@ -499,11 +499,28 @@ const EXPLICIT_FORMATS = {
          stop: [0, 0, DSZ_STOP], trim: [0, 0, DSZ_TRIM], needle: n => [0, 0, DSZ_NEEDLE_BASE + 2 * (n - 1)], end: null },
 };
 
-// Convert DST records → DSB or DSZ byte stream (header + records + end).
-// needleMap: optional array where [0] = starting needle, [1..n] = needle for each real CC.
-//   Missing entries fall back to sequential (start=1, CC1=2, CC2=3, …).
-// DST jumps map 1:1 to jump records (ctrl bit 0); like working Barudan files,
-// no trims are inserted around jump sequences.
+// How many color changes start a new color block: the rows of the needle map after the starting thread.
+// The same count analyze() in index.html makes: for a DST, a change beyond the header's CO count, or the first of
+// two in a row, is a stop.
+function countColorChanges(header, records) {
+  const headerCcs = (!hasExplicitCommands(header) && header.color_changes >= 0) ? header.color_changes : Infinity;
+  let real = 0;
+  for (let i = 0; i < records.length; i++) {
+    if (!records[i].is_color_change) continue;
+    const nextIsCc = i + 1 < records.length && records[i + 1].is_color_change;
+    if (!(nextIsCc || real >= headerCcs)) real++;
+  }
+  return real;
+}
+
+// Convert a design → DSB or DSZ byte stream (header + records + end). The design can be any format loadEmbFile
+// reads, DSB and DSZ included.
+// needleMap: optional array where [0] = starting needle, [1..n] = needle for each real color change.
+//   Missing entries fall back to the needle the file names (DSB, DSZ, U01 …), else sequential
+//   (start=1, CC1=2, CC2=3, …).
+// A color change counts as a stop or a needle change as in countColorChanges. A stop or trim the file has
+// itself is kept. DST jumps map 1:1 to jump records (ctrl bit 0); like working Barudan files, no trims are
+// inserted around jump sequences.
 function convertToExplicit(header, records, needleMap, trimBeforeStop, format) {
   const F = EXPLICIT_FORMATS[format];
   const bufs = [];
@@ -512,24 +529,32 @@ function convertToExplicit(header, records, needleMap, trimBeforeStop, format) {
     if (n < 1 || n > F.maxNeedle) throw new Error(`${F.label} supports needles 1–${F.maxNeedle}; ${what} is set to needle ${n}.`);
     return n;
   };
+  const stop = () => {
+    if (trimBeforeStop) cmd(F.trim);
+    cmd(F.stop);
+  };
   let colorChangeCount = 0;
 
-  cmd(F.needle(checkNeedle(needleMap && needleMap[0] ? needleMap[0] : 1, 'the starting thread')));
+  const start = (needleMap && needleMap[0]) || header.start_needle || 1;
+  cmd(F.needle(checkNeedle(start, 'the starting thread')));
 
-  const header_ccs = header.color_changes >= 0 ? header.color_changes : Infinity;
+  const header_ccs = (!hasExplicitCommands(header) && header.color_changes >= 0) ? header.color_changes : Infinity;
   let real_ccs_seen = 0;
 
   for (let ri = 0; ri < records.length; ri++) {
     const rec = records[ri];
-    if (rec.is_color_change) {
+    if (rec.is_explicit_stop) {
+      stop();
+    } else if (rec.is_explicit_trim) {
+      cmd(F.trim);
+    } else if (rec.is_color_change) {
       const next_is_cc = (ri+1 < records.length) && records[ri+1].is_color_change;
       const is_stop = next_is_cc || (real_ccs_seen >= header_ccs);
       if (is_stop) {
-        if (trimBeforeStop) cmd(F.trim);
-        cmd(F.stop);
+        stop();
       } else {
         const mapEntry = needleMap && needleMap[real_ccs_seen + 1];
-        const needleNo = checkNeedle(mapEntry || (real_ccs_seen + 2), `color change ${real_ccs_seen + 1}`);
+        const needleNo = checkNeedle(mapEntry || rec.needle_no || (real_ccs_seen + 2), `color change ${real_ccs_seen + 1}`);
         real_ccs_seen++;
         colorChangeCount++;
         cmd(F.needle(needleNo));
@@ -549,7 +574,8 @@ function convertToExplicit(header, records, needleMap, trimBeforeStop, format) {
   return out;
 }
 
-// Convert DSB/DSZ records → DST byte stream (header + records + end).
+// Convert a design → DST byte stream (header + records + end). The design can be any format loadEmbFile reads
+// except DST itself: each color change stays one, a stop becomes a pair of changes, a trim three jumps.
 function convertToDst(header, records) {
   const bufs = [];
   let colorChangeCount = 0;
