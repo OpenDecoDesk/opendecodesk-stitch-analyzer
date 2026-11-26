@@ -1,4 +1,5 @@
-// Embroidery file formats: Tajima DST, Barudan DSB and ZSK DSZ — parsing, encoding and conversion.
+// Embroidery file formats: Tajima DST, Barudan DSB and ZSK DSZ — parsing, encoding and conversion — and
+// loadEmbFile, which opens every format (the others through readers.js).
 // Plain browser script (no modules): everything here is a global used by index.html.
 'use strict';
 
@@ -17,12 +18,20 @@ function parseHeader(bytes) {
     if (ci > 0) { fields[t.slice(0, ci).trim()] = t.slice(ci + 1).trim(); }
   }
   const int = k => { const v = parseInt(fields[k]); return isNaN(v) ? -1 : v; };
+  // Some design software lists the threads in the header, one line per color change:
+  // "TC:#rrggbb,description,catalog number". As read by OpenDecoDesk's Designs page.
+  const file_colors = [];
+  for (const line of text.split(/[\r\n]+/)) {
+    const m = line.match(/^TC:\s*#?([0-9a-fA-F]{6})\s*,\s*([^,]*?)\s*,\s*([^,\x1a]*?)\s*$/);
+    if (m) file_colors.push({ hex: m[1].toLowerCase(), brand: '', code: m[3], name: m[2], chart: '' });
+  }
   return {
     label: fields['LA'] || '',
     stitch_count: int('ST'),
     color_changes: int('CO'),
     x_pos: int('+X'), x_neg: int('-X'),
     y_pos: int('+Y'), y_neg: int('-Y'),
+    file_colors,
   };
 }
 
@@ -55,6 +64,18 @@ function parseRecords(bytes) {
   return records;
 }
 
+// A header with no extents (a missing +X, -X, +Y or -Y line) gets them from the moves themselves, in 0.1 mm
+// from the start, every move counted, so the drawing and the Design card still have the design's size.
+function fillMissingExtents(header, records) {
+  if (header.x_pos >= 0 && header.x_neg >= 0 && header.y_pos >= 0 && header.y_neg >= 0) return header;
+  let x = 0, y = 0, x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+  for (const r of records) {
+    x += Math.round(r.dx / UNIT_TO_MM); y += Math.round(r.dy / UNIT_TO_MM);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  return Object.assign(header, { x_pos: x1, x_neg: -x0, y_pos: y1, y_neg: -y0 });
+}
+
 function loadDstBytes(arrayBuffer) {
   let data = new Uint8Array(arrayBuffer);
   // Auto-detect base64: raw DST has ':' (0x3A) at byte 2
@@ -66,9 +87,10 @@ function loadDstBytes(arrayBuffer) {
   }
   if (data.length < HEADER_SIZE) throw new Error(`File too short (${data.length} bytes) — not a valid DST file`);
   const header  = parseHeader(data);
+  header.format = 'dst';
   const records = parseRecords(data.slice(HEADER_SIZE));
   if (records.length === 0) throw new Error('No stitch records found after header');
-  return { header, records };
+  return { header: fillMissingExtents(header, records), records };
 }
 
 // ── DSB (Barudan) Parsing ─────────────────────────────────────────────────────
@@ -139,16 +161,85 @@ function loadExplicitBytes(arrayBuffer, format) {
   const { records, startNeedle } = parseRecordsExplicit(data.slice(HEADER_SIZE), decode);
   header.start_needle = startNeedle;
   if (records.length === 0) throw new Error('No stitch records found after header');
-  return { header, records };
+  return { header: fillMissingExtents(header, records), records };
 }
 
-// DSB and DSZ carry explicit stop/trim/needle commands; DST infers them.
-function hasExplicitCommands(header) { return header.format === 'dsb' || header.format === 'dsz'; }
+// DST says a color change is a stop or a needle change only through the header's CO count (and a pair of
+// changes for a stop). Every other format says which it is in the record itself, as DSB and DSZ do.
+function hasExplicitCommands(header) { return !!header.format && header.format !== 'dst'; }
 
-function loadEmbFile(file, arrayBuffer) {
-  const ext = file.name.split('.').pop().toLowerCase();
+// Design-software files: closed formats nobody has published a description of.
+const CLOSED_FORMATS = ['emb', 'art', 'vip', 'csd', 'sst', 'fdr', 'ofm', 'pxf', 'jan', 'jdx', 'hdx', 'ngs', 'cnd', 'bhf'];
+
+// Every extension this app opens: DST, DSB and DSZ here, the rest in readers.js (StitchReaders).
+function readableExtensions() {
+  const rest = typeof StitchReaders !== 'undefined' ? StitchReaders.exts : [];
+  return ['dst', 'dsb', 'dsz', ...rest.filter(e => !['dst', 'dsb', 'dsz'].includes(e))];
+}
+
+function readByFormat(ext, arrayBuffer) {
+  if (ext === 'dst') return loadDstBytes(arrayBuffer);
   if (ext === 'dsb' || ext === 'dsz') return loadExplicitBytes(arrayBuffer, ext);
-  return loadDstBytes(arrayBuffer);
+  return StitchReaders.read(arrayBuffer, ext);
+}
+
+// Reads a design by its file name's extension. A file whose extension isn't one this app knows, or whose
+// contents don't fit it, is tried once more as the format its first bytes point to (#PES, #PEC, %vsm%, LA:).
+function loadEmbFile(file, arrayBuffer) {
+  const name = file && file.name ? file.name : '';
+  const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+  const known = ext === 'dst' || ext === 'dsb' || ext === 'dsz' ||
+    (typeof StitchReaders !== 'undefined' && StitchReaders.has(ext));
+  const sniffed = typeof StitchReaders !== 'undefined' ? StitchReaders.sniff(arrayBuffer) : null;
+  // #PES, #PEC and %vsm% can't start any other format, and the DST reader reads anything without complaint.
+  if (sniffed && sniffed !== 'dst' && sniffed !== ext) return readByFormat(sniffed, arrayBuffer);
+  if (!known) {
+    if (sniffed) return readByFormat(sniffed, arrayBuffer);
+    if (CLOSED_FORMATS.includes(ext)) {
+      throw new Error(`A .${ext} file is the design software's own project file, and its layout isn't public. ` +
+        'Export the design from that software as a machine file (DST, PES, EXP …) and open that.');
+    }
+    throw new Error(ext ? `This app can't read .${ext} files.` : `This file has no extension, and its contents aren't a format this app knows.`);
+  }
+  try {
+    return readByFormat(ext, arrayBuffer);
+  } catch (e) {
+    // DSB and DSZ have a DST-style header too, so "LA:" says nothing new about them.
+    const dstLike = ext === 'dsb' || ext === 'dsz';
+    if (sniffed && sniffed !== ext && !(dstLike && sniffed === 'dst')) return readByFormat(sniffed, arrayBuffer);
+    throw e;
+  }
+}
+
+// The thread of each color block, by the color index the drawing, the table and the needle map use: the file's
+// own { hex, brand, code, name, chart }, or null where it names none ([] when it names none at all).
+// That index follows analyze() in index.html: a color change that's a stop (a DST change beyond the header's CO
+// count, or the first of two changes in a row) doesn't start a new block. file_colors counts every change, the
+// way the file lists them, so block k's thread is the one listed for where its first stitch is.
+function threadsByColorIndex(header, records) {
+  const listed = header.file_colors || [];
+  if (!listed.some(Boolean)) return [];
+  const headerCcs = (!hasExplicitCommands(header) && header.color_changes >= 0) ? header.color_changes : Infinity;
+  const threads = [];
+  let colorIdx = 0, changes = 0, realChanges = 0;
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i];
+    if (r.is_color_change) {
+      const nextIsCc = i + 1 < records.length && records[i + 1].is_color_change;
+      changes++;
+      if (!(nextIsCc || realChanges >= headerCcs)) { colorIdx++; realChanges++; }
+      continue;
+    }
+    if (r.is_jump || r.is_explicit_trim || r.is_explicit_stop) continue;
+    if (!(colorIdx in threads)) threads[colorIdx] = listed[changes] || null;
+  }
+  return Array.from({ length: colorIdx + 1 }, (_, i) => threads[i] || null);
+}
+
+// "Madeira 800 Red": what a thread is called, from whatever parts the file gives.
+function threadName(t) {
+  if (!t) return '';
+  return [t.brand, t.code, t.name].filter(Boolean).join(' ') || (t.chart || '#' + t.hex);
 }
 
 // Build a colorIndex → needleNo map for DSB files. A needle command applies to the

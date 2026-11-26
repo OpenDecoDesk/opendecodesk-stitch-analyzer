@@ -142,9 +142,10 @@ class Api:
         return {"saved": chosen}
 
 
-# The page counts as working when its scripts, the format code and the save bridge are all there.
+# The page counts as working when its scripts, the format code, the readers and the save bridge are all there.
 SELF_TEST_JS = """JSON.stringify({
   formats: typeof convertToExplicit === 'function' && typeof loadDstBytes === 'function',
+  readers: typeof loadEmbFile === 'function' && typeof StitchReaders === 'object' && StitchReaders.exts.length > 20,
   page: typeof exportConverted === 'function' && typeof saveDownload === 'function',
   version: (document.querySelector('.version-stamp') || {}).textContent || '',
   bridge: !!(window.pywebview && window.pywebview.api && window.pywebview.api.save_file)
@@ -159,7 +160,7 @@ def self_test_result(raw):
         return False, f"unexpected answer: {raw!r}"
     if not isinstance(got, dict):
         return False, f"unexpected answer: {raw!r}"
-    problems = [k for k in ("formats", "page", "bridge") if not got.get(k)]
+    problems = [k for k in ("formats", "readers", "page", "bridge") if not got.get(k)]
     if got.get("version") != __version__:
         problems.append(f"version {got.get('version')!r} != {__version__}")
     return (not problems), ("ok" if not problems else "failed: " + ", ".join(problems))
