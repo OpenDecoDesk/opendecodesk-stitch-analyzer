@@ -1,7 +1,7 @@
 # OpenDecoDesk Stitch Analyzer
 
 A desktop app for checking embroidery designs before they go to a machine, and for converting them
-between machine formats. It opens Tajima **.DST**, Barudan **.DSB** and ZSK **.DSZ** files, and about 25
+between machine formats. It opens Tajima **.DST**, Barudan **.DSB** and ZSK **.DSZ** files, and about 40
 more machine formats (see [Formats](#formats)): Brother .PES, Janome .JEF, Melco .EXP, Pfaff and Viking
 .VP3 and others. Everything runs on your computer: files never leave it, and it works with no internet
 connection.
@@ -79,11 +79,29 @@ against files from the makers' own software yet; please open an issue with one t
 | .INB | Inbro | none | made-up files |
 | .NEW | Ameco | none | made-up files |
 | .EMD | Elna | none | made-up files |
+| .PCD, .PCQ | Pfaff | colors | made-up files |
+| .PMV | Brother (sewing-machine stitch pattern) | none | against pyembroidery |
+| .JPX | Janome | none | made-up files |
+| .100 | Toyota | none | made-up files |
+| .BRO | Bits & Volts | none; needle numbers | made-up files |
+| .DAT | Barudan or Sunstar (told apart by their records) | none; Barudan's needle numbers | made-up files |
+| .EXY | Eltac | none | made-up files |
+| .FXY | Fortron | none; needle numbers | made-up files |
+| .SPX | Pfaff | none | made-up files; stitches only, as pyembroidery reads it |
+| .MIT | Mitsubishi | none | made-up files |
+| .STC | Gunold | none; needle numbers | made-up files |
+| .ZHS | Zeng Hsing | colors, with chart, name and number | made-up files |
+| .ZXY | ZSK (TC) | none; needle numbers | made-up files |
+| .EDR, .COL, .INF | thread color files (see below) | colors; .COL numbers, .INF names | against pyembroidery |
 | DST with `TC:` lines | — | some design software lists each color's thread in the DST header; those are read | made-up files |
 
-**Trims.** DST and TAP have no trim command: three jumps in a row count as a trim, as Tajima machines read
-them. JEF, SEW, PCS, PCM, INB, NEW and SHV have none either: a jump run of more than 3 mm gets a trim, as
-pyembroidery reads them. The rest have their own trim command.
+**Trims.** DST, TAP and EXY have no trim command: three jumps in a row count as a trim, as Tajima machines
+read them. JEF, JPX, SEW, PCS, PCM, PCD, PCQ, INB, NEW, SHV, 100, BRO, MIT, STC, ZHS and ZXY have none either: a jump run of more than 3 mm gets a trim, as pyembroidery reads them.
+The rest have their own trim command (SPX and PMV have no jumps at all).
+
+**Thread color files.** Embird's .EDR, and .COL and .INF files, list a design's threads in sewing order,
+one per color change. Open the design first, then drop its color file on the left panel: the design takes
+those colors and Thread colors turns on. (pyembroidery has no reader for .RGB, so neither does this app.)
 
 ## Download
 From the [Releases](../../releases) page:
@@ -161,7 +179,7 @@ Commit the `icon.icns`, `icon.ico` and `icon.png` it writes.
 [OpenDecoDesk Machine Files](https://github.com/OpenDecoDesk/opendecodesk-machine-files) copies designs
 between a folder and a SmartStitch machine on your network.
 
-Tajima, Barudan, ZSK, Brother, Janome, Melco, Pfaff, Husqvarna Viking, Singer and the other makers named
+Tajima, Barudan, ZSK, Brother, Janome, Melco, Pfaff, Husqvarna Viking, Singer, Sunstar and the other makers named
 here are their owners' brands; this project isn't affiliated with or endorsed by any
 of them.
 

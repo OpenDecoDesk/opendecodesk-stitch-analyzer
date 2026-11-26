@@ -53,11 +53,24 @@ const blocksOf = records => Array.from(records).filter(r => r.is_color_change).l
 // ── Files pyembroidery wrote ────────────────────────────────────────────────────────────────────────────────
 const FIXTURES = JSON.parse(readFileSync(new URL('tests/fixtures/readers.json', root), 'utf8'));
 
+const COLOR_FILES = ['edr', 'col', 'inf'];
 for (const [name, fx] of Object.entries(FIXTURES)) {
+  if (COLOR_FILES.includes(fx.ext)) {
+    test(`${name}: the thread colors pyembroidery reads`, () => {
+      assert.ok(R.isColorFile(fx.ext.toUpperCase()));
+      assert.deepEqual(Array.from(R.readColors(fromHex(fx.hex), fx.ext), t => t.hex), fx.threads);
+    });
+    continue;
+  }
   test(`${name}: read as pyembroidery reads it`, () => {
     const { header, records } = open(`design.${fx.ext}`, fromHex(fx.hex));
     const ours = summarize(eventsOf(records)), theirs = summarize(pyEvents(fx.events));
-    assert.deepEqual(ours.stitches, theirs.stitches, 'needle positions');
+    // This app keeps whole 0.1 mm; pyembroidery keeps the fractions some formats' scaling gives (PMV's 0.25 mm).
+    assert.equal(ours.stitches.length, theirs.stitches.length, 'stitch count');
+    ours.stitches.forEach(([x, y], i) => {
+      const [tx, ty] = theirs.stitches[i];
+      assert.ok(Math.abs(x - tx) <= 0.5 && Math.abs(y - ty) <= 0.5, `stitch ${i}: (${x}, ${y}) vs (${tx}, ${ty})`);
+    });
     assert.deepEqual(ours.between, theirs.between, 'trims, color changes and stops between stitches');
     assert.equal(header.format, fx.ext);
     assert.equal(header.stitch_count, theirs.stitches.length);
@@ -319,4 +332,105 @@ test('threads by color index follow the blocks the analysis counts', () => {
   const e = open('x.exp', exp([3, 3]));
   assert.deepEqual(Array.from(F.threadsByColorIndex(e.header, e.records)), []);
   assert.equal(F.threadName({ hex: 'abcdef', brand: '', code: '', name: '', chart: '' }), '#abcdef');
+});
+
+// ── The formats added from pyembroidery's readers, made up byte by byte ─────────────────────────────────────
+test('PCD and PCQ read as PCS does', () => {
+  const rec = (x, y, c) => [0, ...u32le(x).slice(0, 3), 0, ...u32le(y).slice(0, 3), c];
+  const pc = buf([0x32, 0x02], u16le(1), [...rgb('123456'), 0], u16le(0), rec(0, 0, 0), rec(6, 0, 0), rec(6, 6, 0));
+  for (const ext of ['pcd', 'pcq']) {
+    const { header, records } = open(`x.${ext}`, pc);
+    assert.equal(header.format, ext);
+    assert.equal(kinds(records), '...');
+    assert.deepEqual(hexes(header), ['123456']);
+  }
+});
+
+test('100: 0x61 stitches, an odd control byte jumps, any other changes color', () => {
+  const r = [0x61, 0, 2, 0x81, 0x61, 0, 2, 1, 0x01, 0, 40, 0, 0x00, 0, 0, 0, 0x61, 0, 2, 2];
+  assert.equal(kinds(open('x.100', buf(r)).records), '..TjC.');
+});
+
+test('BRO: long jumps and needle changes', () => {
+  const st = [2, 2, 2, 2, 0x80, 0x03, ...u16le(50), ...u16le(0), 0x80, 0xE3, ...u16le(0), ...u16le(0), 2, 2, 0x80, 0x02];
+  const { records } = open('x.bro', buf(zeros(0x100), st));
+  assert.equal(kinds(records), '..TjC3.');
+});
+
+test('DAT: Barudan records when every control byte has its top bit, Sunstar ones otherwise', () => {
+  const barudan = buf([0x80, 1, 2, 0x80, 1, 2, 0x87, 0, 0, 0x8A, 0, 0, 0x80, 1, 2, 0x98, 0, 0]);
+  assert.equal(kinds(open('x.dat', barudan).records), '..TC2.');
+  const sunstar = buf(zeros(0x100), [2, 1, 0x07, 2, 1, 0x07, 0, 0, 0x80, 0x85, 0, 0x04, 0, 0, 0x87, 2, 1, 0x07, 0, 0, 0]);
+  const s = open('x.dat', sunstar);
+  assert.equal(kinds(s.records), '..TjC.');
+  assert.ok(s.records[0].dy > 0 && s.records[0].dx > 0);   // y 1: up, as pyembroidery reads it
+});
+
+test('EXY is DST records after a 0x100 header; FXY is DSZ records after one', () => {
+  const exy = open('x.exy', buf(zeros(0x100), [1, 0, 3, 1, 0, 3, 0, 0, 0xC3, 1, 0, 3, 0, 0, 0xF3]));
+  assert.equal(kinds(exy.records), '..C.');
+  assert.equal(exy.header.trims, 'jumps');
+  const fxy = open('x.fxy', buf(zeros(0x100), [0, 0, 0x83, 2, 1, 0, 2, 1, 0, 0, 0, 0x9B, 0, 0, 0x85, 2, 1, 0]));
+  assert.equal(kinds(fxy.records), '..TC2.');
+  assert.equal(fxy.header.start_needle, 1);
+});
+
+test('SPX: stitches only, y corrected by its extra byte', () => {
+  const rec = (x, y, c) => [0, 0, ...u16be(y & 0xFFFF), ...u16be(x & 0xFFFF), c & 255, 0, 0];
+  const { records } = open('x.spx', buf(zeros(0x11E), rec(10, 5, 0), rec(10, 5, 1)));
+  assert.equal(kinds(records), '..');
+  assert.equal(Math.round(records[1].dy * 10), 6);   // up 5, plus 1
+});
+
+test('MIT: 0.2 mm moves; a color change counts only right after a stitch; no trim right after one', () => {
+  // control 0b0111 stitch: bits 5–6 of byte 0 = 01, of byte 1 = 11; 0b1100 jump: 11, 00; 0b1000 change: 10, 00.
+  const st = (x, y) => [0x20 | x, 0x60 | y], jump = (x, y) => [0x60 | x, y], cc = [0x40, 0];
+  const { records } = open('x.mit', buf([...st(1, 1), ...st(1, 1), ...cc, ...jump(20, 0), ...st(1, 1), 0, 0]));
+  assert.equal(kinds(records), '..Cj.');
+  assert.equal(Math.round(records[0].dx * 10), 2);
+});
+
+test('JPX: JEF stitches from the offset at the start', () => {
+  const st = [3, 2, 3, 2, 0x80, 0x01, 0, 0, 3, 2, 0x80, 0x10];
+  assert.equal(kinds(open('x.jpx', buf(u32le(0x40), zeros(0x3C), st)).records), '..C.');
+});
+
+test('STC: needle changes are the control byte less 2', () => {
+  const r = [2, 1, 1, 2, 1, 1, 0, 0, 7, 2, 1, 1, 0, 0, 25];
+  assert.equal(kinds(open('x.stc', buf(zeros(0x28), r)).records), '..C5.');
+});
+
+test('ZHS: the thread list names each thread; x and y bits are interleaved', () => {
+  const names = Buffer.from('&$Madeira&#Red&#80000&$&#Blue&#12300', 'utf8');
+  const header = [2, ...rgb('ff0000'), ...rgb('0000ff'), ...u16le(names.length), ...names];
+  // x = 2 (bit 1, from b2), y = 1 (bit 0, from b2): b1 = 0, b2 = 0b11.
+  const st = [0x02, 0, 0b11], stitches = [...st, ...st, 0x04, 0, 0, ...st, 0x80, 0, 0];
+  const at = 0x17, headerAt = at + stitches.length;
+  const file = buf(zeros(0x0F), u32le(at), u32le(headerAt), stitches, header);
+  const { header: h, records } = open('x.zhs', file);
+  assert.equal(kinds(records), '..C.');
+  assert.equal(Math.round(records[0].dx * 10), 2);
+  assert.equal(Math.round(records[0].dy * 10), 1);
+  assert.deepEqual(hexes(h), ['ff0000', '0000ff']);
+  assert.equal(h.file_colors[0].chart, 'Madeira');
+  assert.equal(h.file_colors[0].name, 'Red');
+  assert.equal(h.file_colors[0].code, '800');
+  assert.equal(h.file_colors[1].name, 'Blue');
+});
+
+test('ZXY: needle changes name their needle; 0x20 with x = 0xFF ends the design', () => {
+  const r = [0, 2, 1, 0, 2, 1, 0x20, 0, 4, 0, 2, 1, 0x20, 0xFF, 0, 0, 9, 9];
+  const { records } = open('x.zxy', buf([0], u16be(2), zeros(2), r));
+  assert.equal(kinds(records), '..C4.');
+});
+
+test('color files: dropped after a design, they say its threads', () => {
+  assert.deepEqual(Array.from(R.readColors(buf([1, 2, 3, 0, 255, 254, 253, 0]), 'edr'), t => t.hex), ['010203', 'fffefd']);
+  const col = R.readColors(buf(Buffer.from('2\r\n1800,0,0,0\r\n1801,255,255,255\r\n')), 'col');
+  assert.deepEqual(Array.from(col, t => t.hex + ' ' + t.code), ['000000 1800', 'ffffff 1801']);
+  assert.throws(() => R.readColors(buf([]), 'edr'), /No thread colors/);
+  assert.throws(() => R.readColors(buf([1, 2, 3]), 'xyz'), /isn't a thread color file/);
+  // A design opened by mistake as a color file is not mistaken for one, and the other way round.
+  assert.ok(!R.isColorFile('pes'));
+  assert.throws(() => open('x.edr', buf([1, 2, 3, 0])), /can't read \.edr/);
 });

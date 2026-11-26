@@ -517,8 +517,11 @@ var StitchReaders = (function () {
 
   // ---- 3-byte DST records with no header: .tap (Happy) ----
   // Like DST it has no trim command; the analyzer's three-jumps rule finds the trims, as it does for DST.
-  function readTap(buffer) {
-    const r = new Reader(buffer), out = new Out("TAP");
+  function readTap(buffer) { return dstRecords(new Reader(buffer), "TAP", "tap"); }
+  // Eltac .exy (e??, e01): DST records after a 0x100 header.
+  function readExy(buffer) { const r = new Reader(buffer); tooShort(r, 0x103, "EXY"); return dstRecords(r.seek(0x100), "EXY", "exy"); }
+  function dstRecords(r, kind, format) {
+    const out = new Out(kind);
     const bit = (b, n) => (b >> n) & 1;
     while (r.left() >= 3) {
       const b0 = r.u8(), b1 = r.u8(), b2 = r.u8();
@@ -529,7 +532,7 @@ var StitchReaders = (function () {
       if ((b2 & 0x83) === 0x83) { out.move(dx, -dyUp); continue; }
       out.stitch(dx, -dyUp);
     }
-    const d = out.done("tap");
+    const d = out.done(format);
     d.header.trims = 'jumps';
     return d;
   }
@@ -539,7 +542,11 @@ var StitchReaders = (function () {
   // 6/7 trim, 8 stop, 9–23 needle change (needle = code − 8), 24 end.
   function readU01(buffer) {
     const r = new Reader(buffer); tooShort(r, 0x103, "U01");
-    r.seek(0x100); const out = new Out("U01");
+    const out = new Out("U01");
+    barudanRecords(r.seek(0x100), out);
+    return out.done("u01");
+  }
+  function barudanRecords(r, out) {
     while (r.left() >= 3) {
       const c = r.u8(), by = r.u8(), bx = r.u8();
       const dx = (c & 0x20) ? -bx : bx, dy = (c & 0x40) ? by : -by;
@@ -552,13 +559,14 @@ var StitchReaders = (function () {
       if (cmd >= 9 && cmd <= 0x17) { out.change(null, cmd - 8); out.move(dx, dy); continue; }
       break;
     }
-    return out.done("u01");
   }
   // Gold Thread .gt (from 0x200), laid out like ZSK .dsz: [y, x, ctrl]; 0x40 = x left, 0x20 = y down;
   // low 5 bits 0 stitch, 1 jump; 0x82 stop, 0x9B trim, 0x83–0x9A needle change (two codes per needle).
-  function readGt(buffer) {
-    const r = new Reader(buffer); tooShort(r, 0x200, "GT");
-    r.seek(0x200); const out = new Out("GT");
+  function readGt(buffer) { const r = new Reader(buffer); tooShort(r, 0x200, "GT"); return zRecords(r.seek(0x200), "GT", "gt"); }
+  // Fortron .fxy (f??, f01): the same records after a 0x100 header.
+  function readFxy(buffer) { const r = new Reader(buffer); tooShort(r, 0x103, "FXY"); return zRecords(r.seek(0x100), "FXY", "fxy"); }
+  function zRecords(r, kind, format) {
+    const out = new Out(kind);
     while (r.left() >= 3) {
       const by = r.u8(), bx = r.u8(), c = r.u8();
       const x = (c & 0x40) ? -bx : bx, y = (c & 0x20) ? by : -by;
@@ -570,7 +578,7 @@ var StitchReaders = (function () {
       if (c >= 0x83 && c <= 0x9A) { out.change(null, ((c - 0x83) >> 1) + 1); continue; }
       break;
     }
-    return out.done("gt");
+    return out.done(format);
   }
   // Toyota .10o: [ctrl, y, x]; 0x20 = x left, 0x40 = y down; low 5 bits 0 stitch, 0x10 jump;
   // 0x8A start, 0x85 color change, 0x82 stop, 0x81 trim, 0x87 end.
@@ -796,10 +804,267 @@ var StitchReaders = (function () {
     return out.done("shv");
   }
 
+
+  // ---- More formats from pyembroidery (each as its reader reads it) ----
+  // Pfaff .pcd and .pcq: laid out as .pcs.
+  function readPcd(buffer) { const d = readPcs(buffer); d.header.format = "pcd"; return d; }
+  function readPcq(buffer) { const d = readPcs(buffer); d.header.format = "pcq"; return d; }
+
+  // Toyota .100: 4-byte records [ctrl, ?, x, y], sign in the top bit; 0x61 stitch, odd ctrl jump, else color change.
+  function read100(buffer) {
+    const r = new Reader(buffer), out = new Out("100", { longJumpTrims: true });
+    const signed = (v) => v > 0x80 ? -(v - 0x80) : v;
+    while (r.left() >= 4) {
+      const c = r.u8(); r.u8();
+      const x = signed(r.u8()), y = signed(r.u8());
+      if (c === 0x61) out.stitch(x, -y);
+      else if (c & 0x01) out.move(x, -y);
+      else out.change(null);
+    }
+    return out.done("100");
+  }
+
+  // Bits & Volts .bro (from 0x100): 2-byte stitches; 0x80 then a control byte: 0x7E/0x03 long jump,
+  // 0xE1–0xEF needle change and jump, 0x02/0xE0 end.
+  function readBro(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x102, "BRO");
+    r.seek(0x100); const out = new Out("BRO", { longJumpTrims: true });
+    while (r.left() >= 2) {
+      const b0 = r.u8(), b1 = r.u8();
+      if (b0 !== 0x80) { out.stitch(s8(b0), -s8(b1)); continue; }
+      const c = b1;
+      if (c === 0x00) continue;
+      if (c === 0x02 || c === 0xE0) break;
+      if (c === 0x7E || c === 0x03 || (c > 0xE0 && c < 0xF0)) {
+        const x = r.u16le(), y = r.u16le(); if (y == null) break;
+        if (c > 0xE0) out.change(null, c - 0xE0);
+        out.move(s16(x), -s16(y));
+        continue;
+      }
+      break;
+    }
+    return out.done("bro");
+  }
+
+  // .dat: Barudan (records like .u01, from the start, every control byte with its top bit set) or, when a
+  // record isn't, Sunstar (from 0x100: [x, y, ctrl], sign in the top bit; 0x07 stitch, 0x04 jump, 0x80 trim,
+  // 0x87 color change, 0x84 first stitch, 0 end).
+  function readDat(buffer) {
+    const d = new Uint8Array(buffer);
+    let barudan = d.length >= 3;
+    for (let i = 0; i + 2 < d.length; i += 3) {
+      const c = d[i];
+      if (!(c & 0x80)) { barudan = false; break; }
+      if ((c & 0x1F) === 0x18) break;
+    }
+    if (barudan) {
+      const r = new Reader(buffer), out = new Out("DAT");
+      barudanRecords(r, out);
+      return out.done("dat");
+    }
+    const r = new Reader(buffer); tooShort(r, 0x103, "DAT");
+    r.seek(0x100); const out = new Out("DAT");
+    while (r.left() >= 3) {
+      const b0 = r.u8(), b1 = r.u8(), c = r.u8();
+      const x = (b0 & 0x80) ? -(b0 & 0x7F) : (b0 & 0x7F);
+      const y = -((b1 & 0x80) ? -(b1 & 0x7F) : (b1 & 0x7F));
+      if (c === 0x07 || c === 0x84) { out.stitch(x, y); continue; }
+      if (c === 0x04) { out.move(x, y); continue; }
+      if (c === 0x80) { out.trim(); out.move(x, y); continue; }
+      if (c === 0x87) { out.change(null); out.move(x, y); continue; }
+      break;   // 0 = end
+    }
+    return out.done("dat");
+  }
+
+  // Pfaff .spx (from 0x11E): records of a 2-byte prefix, y and x as 16-bit big-endian, a y correction, 2 more
+  // bytes. Stitches only. pyembroidery's reading, which no one has checked against a machine.
+  function readSpx(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x127, "SPX");
+    r.seek(0x11E); const out = new Out("SPX");
+    while (r.left() >= 9) {
+      r.skip(2);
+      let dy = -s16(r.u16be()); const dx = s16(r.u16be());
+      dy -= s8(r.u8());
+      r.skip(2);
+      out.stitch(dx, dy);
+    }
+    return out.done("spx");
+  }
+
+  // Mitsubishi .mit: 2-byte records, 5-bit moves in 0.2 mm with the sign in the top bit, a 4-bit control from
+  // bits 5–6 of each byte: 0b0111/0b0100/0b0101 stitch, 0b1100 jump, 0b1000 after a stitch a color change, 0 end.
+  function readMit(buffer) {
+    const r = new Reader(buffer), out = new Out("MIT", { longJumpTrims: true });
+    let prev = -1;
+    while (r.left() >= 2) {
+      const b0 = r.u8(), b1 = r.u8();
+      let x = (b0 & 0x1F) * 2, y = -(b1 & 0x1F) * 2;
+      if (b0 & 0x80) x = -x;
+      if (b1 & 0x80) y = -y;
+      const c = ((b0 & 0x60) >> 3) | ((b1 & 0x60) >> 5);
+      if (c === 0) break;
+      if (c === 0b1100) out.move(x, y);
+      else if (c === 0b1000) { if (prev === 0b0111) out.change(null); }
+      else out.stitch(x, y);
+      prev = c;
+    }
+    return out.done("mit");
+  }
+
+  // Janome .jpx: JEF's stitch records; the color list is chart positions pyembroidery doesn't map to colors.
+  function readJpx(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x40, "JPX");
+    const at = r.u32le();
+    r.seek(at); const out = new Out("JPX", { longJumpTrims: true });
+    while (r.left() >= 2) {
+      const b0 = r.u8(), b1 = r.u8();
+      if (b0 !== 0x80) { out.stitch(s8(b0), -s8(b1)); continue; }
+      if (r.left() < 2) break;
+      const x = s8(r.u8()), y = -s8(r.u8());
+      if (b1 === 0x02) { out.move(x, y); continue; }
+      if (b1 === 0x01) { out.change(null); out.move(x, y); continue; }
+      break;   // 0x10 = end
+    }
+    return out.done("jpx");
+  }
+
+  // Gunold .stc (from 0x28): [x, y, ctrl]; 1 stitch, 0 jump, 25 end, anything else a change to needle ctrl − 2.
+  function readStc(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x2B, "STC");
+    r.seek(0x28); const out = new Out("STC", { longJumpTrims: true });
+    while (r.left() >= 3) {
+      const x = s8(r.u8()), y = -s8(r.u8()), c = r.u8();
+      if (c === 0x01) { out.stitch(x, y); continue; }
+      if (c === 0x00) { out.move(x, y); continue; }
+      if (c === 25) break;
+      out.change(null, c - 2);
+    }
+    return out.done("stc");
+  }
+
+  // Zeng Hsing .zhs: a thread list (RGB, then chart, name and number as "&$chart&#name&#number") and
+  // 3-byte records whose x and y bits are interleaved; 0x02 stitch, 0x01 jump, 0x04 color change, 0x80 end,
+  // 0x41 a move added to the next one.
+  function readZhs(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x17, "ZHS");
+    r.seek(0x0F);
+    const stitchAt = r.u32le(), headerAt = r.u32le();
+    r.seek(headerAt);
+    const n = r.u8() || 0, colors = [];
+    for (let i = 0; i < n; i++) { const c = r.u24be(); if (c == null) break; colors.push(rgbColor(c)); }
+    const len = r.u16le() || 0;
+    String(r.str(len)).split("&$").slice(1).forEach((part, i) => {
+      const t = colors[i]; if (!t) return;
+      const [chart, name, number] = part.split("&#");
+      if (chart) t.chart = chart;
+      if (name) t.name = name;
+      if (number && number.length > 3) t.code = number.slice(0, -2);
+    });
+    r.seek(stitchAt);
+    const out = new Out("ZHS", { longJumpTrims: true });
+    out.color(colors[0]); let ci = 0;
+    const bits = (a, b, odd) => {   // odd: the bit positions that come from a; the rest from b
+      let v = 0;
+      for (let k = 0; k < 8; k++) v += ((k % 2 === 0) === odd ? a : b) & (1 << k);
+      v = s8(v);
+      return v >= 63 ? v + 1 : v <= -63 ? v - 1 : v;
+    };
+    let xx = 0, yy = 0;
+    while (r.left() >= 3) {
+      const c = r.u8(), b1 = r.u8(), b2 = r.u8();
+      if (c === 0x10) continue;
+      xx += bits(b1, b2, true); yy += bits(b2, b1, true);
+      if (c === 0x41) continue;
+      if (c === 0x02) { out.stitch(xx, -yy); xx = yy = 0; continue; }
+      if (c === 0x01) { out.move(xx, -yy); xx = yy = 0; continue; }
+      if (c === 0x04) { xx = yy = 0; out.change(colors[++ci] || null); continue; }
+      if (c === 0x80) break;
+    }
+    return out.done("zhs");
+  }
+
+  // ZSK TC .zxy: a header whose length is at 1 (16-bit big-endian, from byte 3), then [ctrl, x, y];
+  // 0x08 = x left, 0x04 = y down; 0 stitch, 0x02 jump, 0x20 needle change (to needle y; x = 0xFF is the end).
+  function readZxy(buffer) {
+    const r = new Reader(buffer); tooShort(r, 6, "ZXY");
+    r.seek(1); const skip = r.u16be(); r.skip(skip || 0);
+    const out = new Out("ZXY", { longJumpTrims: true });
+    while (r.left() >= 3) {
+      let c = r.u8(); const bx = r.u8(), by = r.u8();
+      const x = (c & 0x08) ? -bx : bx, y = (c & 0x04) ? by : -by;
+      c &= ~0x0C;
+      if (c === 0) { out.stitch(x, y); continue; }
+      if (c & 0x02) { out.move(x, y); continue; }
+      if (c & 0x20) { if (bx === 0xFF) break; out.change(null, by); }
+    }
+    return out.done("zxy");
+  }
+
+  // Brother .pmv: a sewing machine's stitch pattern (from 0x64), blocks of [count, length] then points whose
+  // x is relative (6-bit, signed) and y absolute (5-bit, signed), both in 0.25 mm. One thread.
+  function readPmv(buffer) {
+    const r = new Reader(buffer); tooShort(r, 0x68, "PMV");
+    r.seek(0x64); const out = new Out("PMV");
+    let px = 0;
+    for (;;) {
+      const count = r.u16le(), length = r.u16le();
+      if (length == null || length >= 256) break;
+      for (let i = 0; i < count; i++) {
+        let x = r.u8(), y = r.u8();
+        if (y == null) break;
+        if (y > 16) y = -(32 - y);
+        if (x > 32) x = -(64 - x);
+        x *= 2.5; y *= -2.5;
+        out.stitchAbs(px + x, y);
+        px += x;
+      }
+      if (r.left() <= 0) break;
+    }
+    return out.done("pmv");
+  }
+
+  // ---- Thread color files: a design's threads in sewing order, one per color change ----
+  // .edr (Embird): RGB and a spare byte per thread. .col: a count line, then "number,r,g,b" lines.
+  // .inf: a 16-byte header with the count at 12, then per thread a length, RGB at 2, a name and a chart name.
+  function readColorFile(buffer, ext) {
+    const d = new Uint8Array(buffer), threads = [];
+    const rgb = (r, g, b) => ({ hex: [r, g, b].map(v => (v & 255).toString(16).padStart(2, "0")).join(""), brand: "", code: "", name: "", chart: "" });
+    if (ext === "edr") {
+      for (let i = 0; i + 2 < d.length; i += 4) threads.push(rgb(d[i], d[i + 1], d[i + 2]));
+    } else if (ext === "col") {
+      const lines = new TextDecoder("latin1").decode(d).split(/\r?\n/);
+      const n = parseInt(lines[0], 10);
+      for (let i = 1; i <= n && i < lines.length; i++) {
+        const p = lines[i].split(",");
+        if (p.length < 4) break;
+        const t = rgb(+p[1], +p[2], +p[3]); t.code = p[0].trim();
+        threads.push(t);
+      }
+    } else if (ext === "inf") {
+      const r = new Reader(buffer); r.seek(12);
+      const n = r.u32be() || 0;
+      for (let i = 0; i < n && n < 1000; i++) {
+        const len = (r.u16be() || 0) - 2;
+        if (len < 7 || r.left() < len) break;
+        const b = r.bytes(len);
+        const t = rgb(b[2], b[3], b[4]);
+        const texts = new TextDecoder("utf-8").decode(b.subarray(7)).split("\0");
+        t.name = texts[0] || ""; t.chart = texts[1] || "";
+        threads.push(t);
+      }
+    } else throw new Error("This isn't a thread color file this app can read.");
+    if (!threads.length) throw new Error("No thread colors found in this ." + ext + " file.");
+    return threads;
+  }
+
   const READERS = { pes: readPes, pec: readPec, phb: readPhb, phc: readPhc, jef: readJef, sew: readSew, vp3: readVp3,
     xxx: readXxx, pcs: readPcs, pcm: readPcm, exp: readExp, stx: readStx, emd: readEmd, tap: readTap, u01: readU01,
     gt: readGt, "10o": read10o, inb: readInb, ksm: readKsm, new: readNew, max: readMax, tbf: readTbf,
-    hus: readHus, shv: readShv };
+    hus: readHus, shv: readShv,
+    pcd: readPcd, pcq: readPcq, "100": read100, bro: readBro, dat: readDat, exy: readExy, fxy: readFxy,
+    spx: readSpx, mit: readMit, jpx: readJpx, stc: readStc, zhs: readZhs, zxy: readZxy, pmv: readPmv };
+  const COLOR_FILES = ["edr", "col", "inf"];
 
   // Which reader a file's first bytes point to, for a file with no extension or the wrong one.
   function sniff(buffer) {
@@ -821,6 +1086,9 @@ var StitchReaders = (function () {
       return fn(buffer);
     },
     sniff,
+    colorExts: COLOR_FILES,
+    isColorFile(ext) { return COLOR_FILES.includes(String(ext || "").toLowerCase()); },
+    readColors(buffer, ext) { return readColorFile(buffer, String(ext || "").toLowerCase()); },
     _expand: expand,
   };
 })();

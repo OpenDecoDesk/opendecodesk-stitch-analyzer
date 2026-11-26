@@ -26,6 +26,11 @@ FORMATS = [
     ("xxx", {}),
     ("u01", {}),
     ("tbf", {}),
+    ("pmv", {}),
+    # Thread color files: only the threads, no stitches.
+    ("edr", {}),
+    ("col", {}),
+    ("inf", {}),
 ]
 
 
@@ -83,7 +88,8 @@ def reading(path):
     p = pe.read(path)
     names = {pe.STITCH: "stitch", pe.JUMP: "jump", pe.TRIM: "trim", pe.STOP: "stop",
              pe.COLOR_CHANGE: "color", pe.NEEDLE_SET: "color"}
-    events = [[names[cmd & pe.COMMAND_MASK], round(x), round(y)]
+    # Positions to 0.01 of a unit: formats scaled from other units (PCS, PMV, MAX) land between whole 0.1 mm.
+    events = [[names[cmd & pe.COMMAND_MASK], round(x, 2), round(y, 2)]
               for x, y, cmd in p.stitches if (cmd & pe.COMMAND_MASK) in names]
     return {"events": events, "threads": ["%06x" % (t.color & 0xFFFFFF) for t in p.threadlist]}
 
