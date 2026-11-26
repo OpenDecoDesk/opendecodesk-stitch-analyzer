@@ -8,6 +8,7 @@ import vm from 'node:vm';
 const root = new URL('..', import.meta.url);
 const F = vm.createContext({ TextDecoder, TextEncoder, atob, btoa });
 vm.runInContext(readFileSync(new URL('stitch_analyzer/web/formats.js', root), 'utf8'), F, { filename: 'formats.js' });
+vm.runInContext(readFileSync(new URL('stitch_analyzer/web/readers.js', root), 'utf8'), F, { filename: 'readers.js' });
 
 // Recorded from the converter before its code moved into formats.js; any change in output fails here.
 const FIXTURES = JSON.parse(readFileSync(new URL('tests/fixtures/conversions.json', root), 'utf8'));
@@ -174,4 +175,61 @@ test('the farthest run is reported, and whether it is at the start, middle or en
   assert.deepEqual([start.where, start.side, start.outsideMm, start.jumpCount], ['start', 'below', 4, 2]);
   const middle = F.findMovesOutsideDesign([...square, jp(-30, 0), jp(30, 0), st(5, 5), jp(0, 120), st(0, -120)]);
   assert.deepEqual([middle.where, middle.side, middle.outsideMm], ['middle', 'left', 3]);
+});
+
+// ── Any format → DSB, DSZ and DST ───────────────────────────────────────────────────────────────────────────
+// Files pyembroidery wrote (see tests/readers.test.mjs), each read and converted, then read back.
+const READERS = JSON.parse(readFileSync(new URL('tests/fixtures/readers.json', root), 'utf8'));
+const openFixture = key => F.loadEmbFile({ name: `design.${READERS[key].ext}` }, fromHex(READERS[key].hex).buffer);
+
+for (const key of ['three_colors.pes-v6t', 'three_colors.jef', 'three_colors.exp', 'three_colors.vp3', 'three_colors.u01']) {
+  for (const fmt of ['dsb', 'dsz']) {
+    test(`${key} → ${fmt.toUpperCase()}: every stitch, trim and color change in place`, () => {
+      const src = openFixture(key);
+      const out = loadExplicit(F.convertToExplicit(src.header, src.records, null, false, fmt), fmt);
+      const want = stitchPath(src.records), got = stitchPath(out.records);
+      assert.deepEqual(got.stitches, want.stitches);
+      assert.deepEqual(got.end, want.end);
+      const kinds = recs => Array.from(recs).filter(r => r.is_color_change || r.is_explicit_stop || r.is_explicit_trim)
+        .map(r => r.is_explicit_trim ? 'trim' : r.is_explicit_stop ? 'stop' : 'change');
+      assert.deepEqual(kinds(out.records), kinds(src.records));
+      assert.equal(F.countColorChanges(src.header, src.records), 2);
+    });
+  }
+}
+
+test('the needle map numbers a converted file\'s needles; without one, the needles the file names are kept', () => {
+  const pes = openFixture('three_colors.pes-v6t');
+  const mapped = loadExplicit(F.convertToExplicit(pes.header, pes.records, [3, 5, 7], false, 'dsb'), 'dsb');
+  assert.equal(mapped.header.start_needle, 3);
+  assert.deepEqual(commands(mapped.records).filter(c => c.startsWith('needle')), ['needle 5', 'needle 7']);
+  // U01 names its needles (1, then 2 and 3 here, as pyembroidery wrote them).
+  const u01 = openFixture('three_colors.u01');
+  const named = Array.from(u01.records).filter(r => r.is_color_change).map(r => `needle ${r.needle_no}`);
+  const kept = loadExplicit(F.convertToExplicit(u01.header, u01.records, null, false, 'dsz'), 'dsz');
+  assert.deepEqual(commands(kept.records).filter(c => c.startsWith('needle')), named);
+});
+
+test('DSB → DSZ and back keeps the needles, stops and trims', () => {
+  const [name, fx] = Object.entries(FIXTURES)[0];
+  const dsb = loadExplicit(fromHex(fx.dsb_map), 'dsb');
+  const dsz = loadExplicit(F.convertToExplicit(dsb.header, dsb.records, null, false, 'dsz'), 'dsz');
+  assert.equal(dsz.header.start_needle, dsb.header.start_needle, name);
+  assert.deepEqual(commands(dsz.records), commands(dsb.records));
+  const back = loadExplicit(F.convertToExplicit(dsz.header, dsz.records, null, false, 'dsb'), 'dsb');
+  assert.equal(toHex(F.convertToDst(back.header, back.records)), toHex(F.convertToDst(dsb.header, dsb.records)));
+});
+
+test('Trim before stop also applies to stops the file has itself', () => {
+  const jef = F.loadEmbFile({ name: 'x.jef' }, (() => {
+    // One color, a stop (chart position 0) in the middle.
+    const st = [3, 2, 3, 2, 0x80, 0x01, 0, 0, 3, 2, 0x80, 0x10];
+    const head = new Uint8Array(4 + 20 + 4 + 88 + 8);
+    new DataView(head.buffer).setUint32(0, head.length, true);
+    new DataView(head.buffer).setUint32(24, 2, true);
+    new DataView(head.buffer).setUint32(116, 1, true);
+    return new Uint8Array([...head, ...st]).buffer;
+  })());
+  const out = loadExplicit(F.convertToExplicit(jef.header, jef.records, null, true, 'dsb'), 'dsb');
+  assert.deepEqual(commands(out.records), ['trim', 'stop']);
 });

@@ -27,6 +27,9 @@ connection.
   - **DSB / DSZ → DST**: stops become a pair of color changes and trims become three jumps.
   - **Any other format → DST**, the same way: each color change stays a color change, stops become a pair
     of color changes and trims three jumps.
+  - **Any format → DSB or DSZ**, DSB → DSZ and DSZ → DSB included, with the same needle map and Trim before
+    stop. The map starts from the needles the file names (DSB, DSZ, U01, TBF, KSM …), else 1, 2, 3 …;
+    stops and trims the file has are kept.
 - It remembers the thresholds and options between runs.
 
 Opening a file: drop it on the left panel, or click the panel to browse. Saving (an SVG of the preview,
