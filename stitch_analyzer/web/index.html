@@ -357,6 +357,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   text-align: center;
 }
 .empty-sub { font-size: 13px; text-align: center; max-width: 320px; }
+.empty-formats { font-size: 11px; margin-top: 10px; opacity: 0.75; font-family: 'IBM Plex Mono', monospace; }
 
 /* Tabs */
 .tab-bar {
@@ -486,6 +487,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   transition: all .15s;
 }
 .icon-btn:hover { color: var(--text); border-color: var(--text); }
+.thread-toggle { cursor: pointer; }
+.thread-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.thread-name { margin-left: 8px; font-weight: 400; color: var(--muted); }
 .icon-btn svg { width: 13px; height: 13px; }
 .svg-display {
   padding: 16px;
@@ -1078,13 +1082,13 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   <aside class="sidebar">
     <div class="sidebar-section">
       <div class="drop-zone" id="dropZone">
-        <input type="file" id="fileInput" accept=".dst,.DST,.dsb,.DSB,.dsz,.DSZ" title="Choose a DST, DSB or DSZ file">
+        <input type="file" id="fileInput" class="design-file-input" title="Choose an embroidery machine file">
         <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="17 8 12 3 7 8"/>
           <line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
-        <div class="drop-label">Drop a .dst, .dsb or .dsz file</div>
+        <div class="drop-label">Drop an embroidery file</div>
         <div class="drop-sub">or click to browse</div>
       </div>
       <div class="file-badge" id="fileBadge">
@@ -1099,8 +1103,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       <button type="button" class="compare-toggle-btn" id="compareToggleBtn">+ Compare with another file</button>
       <div class="compare-zone" id="compareZone" hidden>
         <div class="drop-zone drop-zone-compact" id="compareDropZone">
-          <input type="file" id="compareFileInput" accept=".dst,.DST,.dsb,.DSB,.dsz,.DSZ" title="Choose a second DST, DSB or DSZ file to compare against">
-          <div class="drop-label">Drop second .dst / .dsb / .dsz file</div>
+          <input type="file" id="compareFileInput" class="design-file-input" title="Choose a second embroidery file to compare against">
+          <div class="drop-label">Drop a second embroidery file</div>
           <div class="drop-sub">or click to browse</div>
         </div>
         <div class="file-badge file-badge-compact" id="compareFileBadge">
@@ -1266,7 +1270,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         <path d="M52 52 L55 55 L60 49" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <div class="empty-title">No file loaded</div>
-      <div class="empty-sub">Drop a Tajima .dst, Barudan .dsb or ZSK .dsz file into the left panel. Everything runs on this computer — files never leave your device.</div>
+      <div class="empty-sub">Drop an embroidery machine file into the left panel: Tajima .dst, Barudan .dsb, ZSK .dsz, Brother .pes, Janome .jef, Melco .exp, Pfaff and Viking .vp3 and more. Everything runs on this computer — files never leave your device.</div>
+      <div class="empty-sub empty-formats" id="formatList"></div>
     </div>
 
     <!-- Tab bar (hidden until analysis) -->
@@ -1291,6 +1296,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
           <div class="svg-panel-header">
             <span class="svg-panel-title">Design Preview</span>
             <div class="svg-actions">
+              <label class="icon-btn thread-toggle" title="Draw the stitches in the colors the file names (the palette's where it names none)">
+                <input type="checkbox" id="threadColors">
+                Thread colors
+              </label>
               <button class="icon-btn" id="copySvgBtn" title="Copy SVG to clipboard">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 Copy SVG
@@ -1566,7 +1575,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         <div class="quality-section">
           <div class="grid-header">
             <div class="grid-title">Limitations</div>
-            <div class="grid-sub">What this tool can't tell from the DST file alone:</div>
+            <div class="grid-sub">What this tool can't tell from a machine file alone:</div>
           </div>
           <ul class="limitations-list" id="limitationsList"></ul>
         </div>
@@ -1609,6 +1618,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </div>
 
 <script src="formats.js?v=dev"></script>
+<script src="readers.js?v=dev"></script>
 <script>
 'use strict';
 
@@ -1714,7 +1724,20 @@ function collectMoveDistances(records) {
 // Text going into the SVG: a raw < or & makes it invalid XML, and strict renderers (rsvg) refuse the file.
 const xmlEscape = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 
-function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
+// The color a color block is shown in: the file's own thread when it names one, else the palette's.
+function threadHex(threads, colorIdx) {
+  const t = threads && threads[colorIdx];
+  return t && t.hex ? '#' + t.hex : COLOR_PALETTE[colorIdx % COLOR_PALETTE.length];
+}
+// A thread too light to see on the drawing's near-white background.
+function isLightHex(hex) {
+  const n = parseInt(hex.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255].map(v => v / 255);
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.8;
+}
+
+// opts.threadColors: draw the stitches in their threads' colors instead of grey.
+function buildSvg(records, header, minMm, shortMm, filename, trimDistMm, opts = {}) {
+  const threads = threadsByColorIndex(header, records);
   let bx0,bx1,by0,by1;
   if (header.x_pos>=0&&header.x_neg>=0) { bx0=-header.x_neg*UNIT_TO_MM; bx1=header.x_pos*UNIT_TO_MM; } else { bx0=-70;bx1=70; }
   if (header.y_pos>=0&&header.y_neg>=0) { by0=-header.y_neg*UNIT_TO_MM; by1=header.y_pos*UNIT_TO_MM; } else { by0=-70;by1=70; }
@@ -1735,7 +1758,7 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
   for (let ri=0; ri<records.length; ri++) {
     const rec=records[ri];
     if (rec.is_explicit_stop) {
-      if (poly.length>1) stitch_polys.push(poly);
+      if (poly.length>1) stitch_polys.push({p:poly, ci:color_index_svg});
       if (lx!==null) {
         stop_marks.push({x:lx, y:ly, stitch_no:needle_count, color_idx:color_index_svg, ord:ri});
         stop_from = {fromX:lx, fromY:ly};
@@ -1743,13 +1766,13 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
       poly=[]; had=false; pj=0; pjdx=0; pjdy=0; ptrim=false; jump_count=0; trimmed=true; continue;
     }
     if (rec.is_explicit_trim) {
-      if (poly.length>1) stitch_polys.push(poly);
+      if (poly.length>1) stitch_polys.push({p:poly, ci:color_index_svg});
       // lx, not had: a preceding stop clears had, and trim-after-stop must still show.
       if (lx!==null) trim_marks.push({x:lx, y:ly, stitch_no:needle_count, color_idx:color_index_svg, ord:ri});
       poly=[]; had=false; pj=0; pjdx=0; pjdy=0; ptrim=false; jump_count=0; trimmed=true; continue;
     }
     if (rec.is_color_change) {
-      if (poly.length>1) stitch_polys.push(poly);
+      if (poly.length>1) stitch_polys.push({p:poly, ci:color_index_svg});
       const next_is_cc = (ri+1<records.length) && records[ri+1].is_color_change;
       // A CC is a stop when: (a) the next record is also a CC (stop+colorchange pair),
       // OR (b) we've already seen all the color changes the header advertises (lone terminal stop).
@@ -1797,7 +1820,7 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
     trimmed=false; jump_count=0;
     pj=0; pjdx=0; pjdy=0; ptrim=false;
   }
-  if (poly.length>1) stitch_polys.push(poly);
+  if (poly.length>1) stitch_polys.push({p:poly, ci:color_index_svg});
 
   const MARGIN=40, MAX_DIM=800;
   const rx=(bx1-bx0)||1, ry=(by1-by0)||1;
@@ -1814,7 +1837,9 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
   const T_COLS = [T_START, T_START+24, T_START+56, T_START+118, T_START+164, T_START+232];
   const T_HDRS = ['#','Needle','Stitch','Thread','X (mm)','Y (mm)'];
   const LEGEND_ITEMS = [
-    {c:'#bbbbbb',d:'',   lbl:`Context`,                      shape:'line'},
+    opts.threadColors
+      ? {c:threadHex(threads, 0),d:'', lbl:'Stitches (thread colors)', shape:'line'}
+      : {c:'#bbbbbb',d:'',   lbl:`Context`,                      shape:'line'},
     {c:'#ff8c00',d:'',   lbl:`Short (< ${shortMm} mm)`,      shape:'line'},
     {c:'#e85d5d',d:'',   lbl:`Long (> ${minMm} mm)`,         shape:'line'},
     {c:'#444444',d:'',   lbl:'Jump (travel)',                 shape:'line'},
@@ -1845,9 +1870,28 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
     L.push('</g>');
   };
 
-  if (stitch_polys.length) {
+  const polyline = p => `<polyline points="${p.map(([x,y])=>`${tx(x)},${ty(y)}`).join(' ')}"/>`;
+  if (stitch_polys.length && opts.threadColors) {
+    // One group per thread, in sewing order; a light thread gets a grey edge drawn under it.
+    const byColor = new Map();
+    for (const {p, ci} of stitch_polys) {
+      const hex = threadHex(threads, ci);
+      if (!byColor.has(hex)) byColor.set(hex, []);
+      byColor.get(hex).push(p);
+    }
+    for (const [hex, polys] of byColor) {
+      if (isLightHex(hex)) {
+        L.push('<g stroke="#9a9a9a" stroke-width="1.4" fill="none" stroke-linejoin="round">');
+        for (const p of polys) L.push(polyline(p));
+        L.push('</g>');
+      }
+      L.push(`<g stroke="${hex}" stroke-width="0.9" fill="none" stroke-linejoin="round">`);
+      for (const p of polys) L.push(polyline(p));
+      L.push('</g>');
+    }
+  } else if (stitch_polys.length) {
     L.push('<g stroke="#bbbbbb" stroke-width="0.4" fill="none">');
-    for (const p of stitch_polys) L.push(`<polyline points="${p.map(([x,y])=>`${tx(x)},${ty(y)}`).join(' ')}"/>`);
+    for (const {p} of stitch_polys) L.push(polyline(p));
     L.push('</g>');
   }
   seg_lines(short_segs,  '#ff8c00');
@@ -1961,7 +2005,8 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
       if (i%2===1) L.push(`<rect x="${T_START}" y="${ty2-T_ROW+4}" width="${totalW-MARGIN-T_START}" height="${T_ROW}" fill="#f5f5f5"/>`);
       const isStart = ev.type === 'Start';
       const typeColor = ev.type === 'T' ? '#9B40D0' : ev.type === 'S' ? '#3AAA70' : '#20A8CC';
-      const swatchColor = COLOR_PALETTE[ev.color_idx % COLOR_PALETTE.length];
+      const swatchColor = threadHex(threads, ev.color_idx);
+      const swatchTitle = threads[ev.color_idx] ? `<title>${xmlEscape(threadName(threads[ev.color_idx]))}</title>` : '';
       // For CC events, ev.needle_no (from DSB record) takes priority; DST falls back to svgColorToNeedle mapping.
       const svgNeedle = ev.needle_no != null ? ev.needle_no : (svgColorToNeedle[ev.color_idx] ?? (ev.color_idx + 1));
       // Start and CC show the needle they represent; T and S show their letter code.
@@ -1969,7 +2014,7 @@ function buildSvg(records, header, minMm, shortMm, filename, trimDistMm) {
       L.push(`<text x="${T_COLS[0]}" y="${ty2}" font-family="monospace" font-size="10" fill="#222">${isStart ? '▶' : i}</text>`);
       L.push(`<text x="${T_COLS[1]}" y="${ty2}" font-family="monospace" font-size="10" font-weight="600" fill="${typeColor}">${typeLabel}</text>`);
       L.push(`<text x="${T_COLS[2]}" y="${ty2}" font-family="monospace" font-size="10" fill="${isStart ? '#aaa' : '#222'}">${isStart ? 'start' : ev.stitch_no}</text>`);
-      L.push(`<rect x="${T_COLS[3]}" y="${ty2-8}" width="8" height="8" rx="1.5" fill="${swatchColor}"/>`);
+      L.push(`<rect x="${T_COLS[3]}" y="${ty2-8}" width="8" height="8" rx="1.5" fill="${swatchColor}" stroke="#00000033" stroke-width="0.5">${swatchTitle}</rect>`);
       L.push(`<text x="${T_COLS[3]+11}" y="${ty2}" font-family="monospace" font-size="10" fill="#222">N${svgNeedle}</text>`);
       L.push(`<text x="${T_COLS[4]}" y="${ty2}" font-family="monospace" font-size="10" fill="${isStart ? '#aaa' : '#222'}">${ev.x.toFixed(2)}</text>`);
       L.push(`<text x="${T_COLS[5]}" y="${ty2}" font-family="monospace" font-size="10" fill="${isStart ? '#aaa' : '#222'}">${ev.y.toFixed(2)}</text>`);
@@ -3731,28 +3776,31 @@ function rankFindings(findings) {
   return numeric.map(pair => pair[1]).concat(other);
 }
 
-// §9 — explicitly NOT derivable from a DST file. Stated plainly, never computed or guessed.
-// Verbatim from dst_analyzer.py's LIMITATIONS (~3456-3480).
+// §9 — explicitly NOT derivable from a machine file. Stated plainly, never computed or guessed.
+// From dst_analyzer.py's LIMITATIONS (~3456-3480), widened from DST to every format the app opens.
 const LIMITATIONS = [
-  "Underlay vs top stitch: a DST file carries no marker distinguishing underlay stitches from " +
+  "Underlay vs top stitch: a machine file carries no marker distinguishing underlay stitches from " +
   "the finished top/cover stitching — this report's stitch-type classification (run/satin/fill) " +
   "works purely off stitch-vector geometry and cannot separate underlay from what it supports; " +
   "nothing in this report should be read as an underlay determination.",
   "Intended density settings: only the resulting geometry (where each needle-down penetration " +
-  "landed) is present in a DST file — the digitizer's original density parameter (e.g. a 0.4mm " +
+  "landed) is present in a machine file — the digitizer's original density parameter (e.g. a 0.4mm " +
   "fill row spacing setting) that produced that geometry is not recorded and cannot be recovered.",
   "Pull compensation: a design-time digitizing setting (how much a stitch is lengthened to " +
   "counteract fabric pull once stitched) is not recoverable from geometry — this tool cannot " +
   "separate stitched-in compensation from the design's flat/screen intent.",
-  "Needle assignments: DST records a bare color-change COMMAND, not which physical needle or " +
-  "thread the operator loaded for it — the speed model's color-change overhead is therefore a " +
-  "flat average per change, not a needle-specific travel-time estimate.",
+  "Needle assignments: DST and most home-machine formats record a bare color-change COMMAND, not " +
+  "which physical needle or thread the operator loaded for it (DSB, DSZ, U01, TBF and KSM do name " +
+  "the needle) — the speed model's color-change overhead is therefore a flat average per change, " +
+  "not a needle-specific travel-time estimate.",
   "Fabric/substrate intent: the correct length/density thresholds depend on the target fabric, " +
-  "which a DST file never records — that is exactly why Substrate is a required judgment call " +
+  "which a machine file never records — that is exactly why Substrate is a required judgment call " +
   "the user makes, not something this tool infers from the file.",
-  "Trim-detection heuristic: this tool treats 3+ consecutive jump records as an implied thread " +
-  "trim — the standard Tajima convention — but some machines/software interpret the jump-run-" +
-  "length trim rule slightly differently.",
+  "Trim-detection heuristic: DST and TAP have no trim command, so this tool treats 3+ consecutive " +
+  "jump records as an implied thread trim — the standard Tajima convention — but some machines/" +
+  "software interpret the jump-run-length trim rule slightly differently. JEF, SEW, PCS, PCM, INB, " +
+  "NEW and SHV have no trim command either; for those a jump of more than 3 mm counts as a trim, " +
+  "as pyembroidery reads them.",
 ];
 
 // ── Compare phase: §7 — flatten + diff two QualityReports ───────────────────
@@ -3878,6 +3926,10 @@ let currentQualityReport = null;
 let storedRecords = null;
 let storedHeader = null;
 let storedColorToNeedle = {}; // colorIndex → needleNo, DSB only; empty means sequential
+let storedThreads = [];       // colorIndex → the file's own thread (threadsByColorIndex), [] when it names none
+
+// What the drawing takes besides the design and the sliders.
+const svgOptions = () => ({ threadColors: document.getElementById('threadColors').checked });
 // Compare phase — the second file and its independently-computed QualityReport. Never touches
 // currentFile/currentResult/currentQualityReport, so the primary Quality tab is unaffected by
 // loading, analyzing, or removing a compare file.
@@ -3950,7 +4002,15 @@ trimDistSlider.addEventListener('input', () => {
     const minMm      = parseFloat(segSlider.value);
     const shortMm    = parseFloat(shortSlider.value);
     const trimDistMm = parseFloat(trimDistSlider.value);
-    currentSvg = buildSvg(storedRecords, storedHeader, minMm, shortMm, currentFile.name, trimDistMm);
+    currentSvg = buildSvg(storedRecords, storedHeader, minMm, shortMm, currentFile.name, trimDistMm, svgOptions());
+    document.getElementById('svgDisplay').innerHTML = currentSvg;
+  }
+});
+// Thread colors only changes the drawing, so it redraws just that, like the jump slider.
+document.getElementById('threadColors').addEventListener('change', () => {
+  if (storedRecords && storedHeader && currentFile) {
+    currentSvg = buildSvg(storedRecords, storedHeader, parseFloat(segSlider.value), parseFloat(shortSlider.value),
+      currentFile.name, parseFloat(trimDistSlider.value), svgOptions());
     document.getElementById('svgDisplay').innerHTML = currentSvg;
   }
 });
@@ -3958,6 +4018,14 @@ trimDistSlider.addEventListener('input', () => {
 // ── Drop zone ─────────────────────────────────────────────────────────────────
 const dropZone  = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
+
+// The file pickers offer every format the readers know (formats.js and readers.js); dropping a file isn't limited.
+(function listFormats() {
+  const exts = readableExtensions();
+  const accept = exts.flatMap(e => [`.${e}`, `.${e.toUpperCase()}`]).join(',');
+  document.querySelectorAll('.design-file-input').forEach(inp => { inp.accept = accept; });
+  document.getElementById('formatList').textContent = 'Opens ' + exts.map(e => '.' + e).join(' ');
+})();
 
 function formatBytes(n) {
   if (n < 1024) return n + ' B';
@@ -4076,7 +4144,8 @@ function renderStatCards(result) {
     ? `${((h.x_neg+h.x_pos)*UNIT_TO_MM).toFixed(1)} × ${((h.y_neg+h.y_pos)*UNIT_TO_MM).toFixed(1)} mm`
     : '—';
 
-  cards.push({label:'Design', value: h.label||'Unnamed', sub: extents, cls:'accent'});
+  const fmtName = h.format ? h.format.toUpperCase() : '';
+  cards.push({label: fmtName ? `Design · ${fmtName}` : 'Design', value: h.label||(currentFile ? currentFile.name.replace(/\.[^.]+$/, '') : '')||'Unnamed', sub: extents, cls:'accent'});
   cards.push({label:'Total Records', value: fmt(result.total_stitches), sub: `${fmt(result.color_changes)} color change${result.color_changes!==1?'s':''}`, cls:''});
 
   const longTotal = result.stitch_count_over + result.jump_trim_count + result.jump_travel_count;
@@ -4114,15 +4183,17 @@ function renderTable(segments) {
   let lastColor = -1;
   for (const s of segments) {
     if (s.color_index !== lastColor) {
-      const hdrColor = COLOR_PALETTE[s.color_index % COLOR_PALETTE.length];
-      html += `<tr class="row-needle-header"><td colspan="6"><span class="color-dot" style="background:${hdrColor};margin-right:6px"></span>Needle ${needleLabel(s.color_index)}</td></tr>`;
+      const hdrColor = threadHex(storedThreads, s.color_index);
+      const thread = storedThreads[s.color_index];
+      const name = thread ? `<span class="thread-name">${xmlEscape(threadName(thread))}</span>` : '';
+      html += `<tr class="row-needle-header"><td colspan="6"><span class="color-dot" style="background:${hdrColor};margin-right:6px"></span>Needle ${needleLabel(s.color_index)}${name}</td></tr>`;
       lastColor = s.color_index;
     }
     const chips = [];
     if (s.has_jump) chips.push(`<span class="chip chip-jump">Jump</span>`);
     if (s.trim_implied) chips.push(`<span class="chip chip-trim">Trim</span>`);
     const cc = s.cc_before&&s.cc_after ? '&lt;&gt;' : s.cc_before ? '&gt;' : s.cc_after ? '&lt;' : '';
-    const color = COLOR_PALETTE[s.color_index % COLOR_PALETTE.length];
+    const color = threadHex(storedThreads, s.color_index);
     html += `<tr class="${s.trim_implied?'row-trim':''}">
       <td class="num">${s.index}</td>
       <td>(${s.start_x.toFixed(1)}, ${s.start_y.toFixed(1)})</td>
@@ -4678,7 +4749,7 @@ const CONFIG_NUMBER_IDS = [
   'speedLongHalfInput','speedFloorMmInput','speedFloorPctInput',
 ];
 const CONFIG_SELECT_IDS  = ['substrateSelect'];
-const CONFIG_CHECK_IDS   = ['nonWearable', 'includeJumps'];
+const CONFIG_CHECK_IDS   = ['nonWearable', 'includeJumps', 'threadColors'];
 
 function saveConfig() {
   try {
@@ -4856,7 +4927,8 @@ function runWithRecords(header, records) {
   const speedOverrides = getSpeedOverrides();
   const result    = analyze(header, records, minMm, shortMm, excJumps, trimDistMm);
   const moves     = collectMoveDistances(records);
-  currentSvg      = buildSvg(records, header, minMm, shortMm, filename, trimDistMm);
+  storedThreads   = threadsByColorIndex(header, records);
+  currentSvg      = buildSvg(records, header, minMm, shortMm, filename, trimDistMm, svgOptions());
   currentResult   = result;
   currentQualityReport = runQualityAnalysis(records, filename, substrate, nonWearable, speedOverrides);
   storedColorToNeedle  = buildColorToNeedle(header, records);
@@ -4934,7 +5006,7 @@ async function saveDownload(filename, bytes) {
 
 document.getElementById('downloadSvgBtn').addEventListener('click', () => {
   if (!currentSvg) return;
-  const filename = currentFile ? currentFile.name.replace(/\.(dst|dsb|dsz)$/i, '.svg') : 'analysis.svg';
+  const filename = currentFile ? currentFile.name.replace(/\.[^.]+$/, '') + '.svg' : 'analysis.svg';
   saveDownload(filename, new TextEncoder().encode(currentSvg));
 });
 
@@ -4962,7 +5034,8 @@ function buildNeedleMapUI(colorChangeCount) {
 
     const swatch = document.createElement('span');
     swatch.className = 'needle-map-swatch';
-    swatch.style.background = COLOR_PALETTE[i % COLOR_PALETTE.length];
+    swatch.style.background = threadHex(storedThreads, i);
+    if (storedThreads[i]) swatch.title = threadName(storedThreads[i]);
 
     const lbl = document.createElement('span');
     lbl.className = 'needle-map-label';
@@ -5030,7 +5103,7 @@ function exportConverted(targetFormat) {
     alert(e.message);
     return;
   }
-  const base = currentFile.name.replace(/\.(dst|dsb|dsz)$/i, '');
+  const base = currentFile.name.replace(/\.[^.]+$/, '');
   saveDownload(`${base}.${targetFormat}`, bytes);
 }
 
@@ -5044,7 +5117,7 @@ document.getElementById('convertDszBtn').addEventListener('click', () => exportC
 document.getElementById('downloadHeatmapBtn').addEventListener('click', () => {
   const canvas = document.getElementById('layeringHeatmapCanvas');
   if (!canvas || !canvas.width || !canvas.height) return;
-  const filename = currentFile ? currentFile.name.replace(/\.(dst|dsb|dsz)$/i, '-heatmap.png') : 'heatmap.png';
+  const filename = currentFile ? currentFile.name.replace(/\.[^.]+$/, '') + '-heatmap.png' : 'heatmap.png';
   canvas.toBlob(async blob => {
     if (blob) saveDownload(filename, new Uint8Array(await blob.arrayBuffer()));
   }, 'image/png');

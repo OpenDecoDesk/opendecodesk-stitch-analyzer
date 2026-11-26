@@ -26,6 +26,7 @@ STAMPS = [
     # earlier one's copy from the window's cache (app.py does the same for the page itself).
     (PAGE, r'(<link rel="stylesheet" href="fonts/plex\.css\?v=)([^"]*)(">)'),
     (PAGE, r'(<script src="formats\.js\?v=)([^"]*)("></script>)'),
+    (PAGE, r'(<script src="readers\.js\?v=)([^"]*)("></script>)'),
 ]
 
 

@@ -78,6 +78,7 @@ class StampTests(unittest.TestCase):
         page = self.page()
         self.assertIn('<link rel="stylesheet" href="fonts/plex.css?v=2026.11.01.01">', page)
         self.assertIn('<script src="formats.js?v=2026.11.01.01"></script>', page)
+        self.assertIn('<script src="readers.js?v=2026.11.01.01"></script>', page)
         self.assertNotIn("?v=dev", page)
 
     def test_leaves_the_rest_alone(self):

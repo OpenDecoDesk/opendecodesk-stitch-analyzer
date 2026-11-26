@@ -117,7 +117,7 @@ class PlacesTests(unittest.TestCase):
 
     def test_web_dir_from_source_has_the_page(self):
         web = app.web_dir()
-        for name in ("index.html", "formats.js", os.path.join("fonts", "plex.css")):
+        for name in ("index.html", "formats.js", "readers.js", os.path.join("fonts", "plex.css")):
             self.assertTrue(os.path.isfile(os.path.join(web, name)), name)
 
     def test_web_dir_when_frozen(self):
@@ -157,7 +157,7 @@ class PlacesTests(unittest.TestCase):
 
 class SelfTestResultTests(unittest.TestCase):
     def answer(self, **kw):
-        got = {"formats": True, "page": True, "bridge": True, "version": __version__}
+        got = {"formats": True, "readers": True, "page": True, "bridge": True, "version": __version__}
         got.update(kw)
         return json.dumps(got)
 
@@ -207,6 +207,7 @@ class VersionTests(unittest.TestCase):
         html = read("stitch_analyzer", "web", "index.html")
         self.assertIn(f'<link rel="stylesheet" href="fonts/plex.css?v={__version__}">', html)
         self.assertIn(f'<script src="formats.js?v={__version__}"></script>', html)
+        self.assertIn(f'<script src="readers.js?v={__version__}"></script>', html)
 
     def test_files_are_sent_with_no_store(self):
         class Response:
@@ -236,7 +237,7 @@ class VersionTests(unittest.TestCase):
 class BundleTests(unittest.TestCase):
     def test_works_offline(self):
         allowed = {"http://www.w3.org/2000/svg"}
-        for parts in (("index.html",), ("formats.js",), ("fonts", "plex.css")):
+        for parts in (("index.html",), ("formats.js",), ("readers.js",), ("fonts", "plex.css")):
             urls = set(re.findall(r"https?://[^\s\"'`)<>]+", read("stitch_analyzer", "web", *parts)))
             self.assertEqual(urls - allowed, set(), os.path.join(*parts))
 
@@ -249,7 +250,10 @@ class BundleTests(unittest.TestCase):
 
     def test_page_loads_the_format_code_first(self):
         html = read("stitch_analyzer", "web", "index.html")
-        self.assertLess(html.index(f'<script src="formats.js?v={__version__}"></script>'), html.index("<script>"))
+        formats = html.index(f'<script src="formats.js?v={__version__}"></script>')
+        readers = html.index(f'<script src="readers.js?v={__version__}"></script>')
+        self.assertLess(formats, readers)
+        self.assertLess(readers, html.index("<script>"))
 
 
 if __name__ == "__main__":

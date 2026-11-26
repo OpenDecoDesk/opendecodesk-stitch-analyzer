@@ -10,6 +10,7 @@ const root = new URL('..', import.meta.url);
 const read = p => readFileSync(new URL(p, root), 'utf8').replace(/\r\n/g, '\n');
 const F = vm.createContext({ TextDecoder, TextEncoder, atob, btoa });
 vm.runInContext(read('stitch_analyzer/web/formats.js'), F, { filename: 'formats.js' });
+vm.runInContext(read('stitch_analyzer/web/readers.js'), F, { filename: 'readers.js' });
 
 // buildSvg lives in the page's inline script, which also drives the DOM, so only its pieces are run here.
 const page = read('stitch_analyzer/web/index.html');
@@ -17,6 +18,8 @@ const grab = re => { const m = page.match(re); assert.ok(m, `not found in index.
 vm.runInContext([
   grab(/^const COLOR_PALETTE = .*$/m),
   grab(/^const xmlEscape = .*$/m),
+  grab(/^function threadHex\([\s\S]*?\n\}\n/m),
+  grab(/^function isLightHex\([\s\S]*?\n\}\n/m),
   grab(/^function buildSvg\([\s\S]*?\n\}\n/m),
 ].join('\n'), F, { filename: 'index.html' });
 
@@ -37,3 +40,34 @@ for (const [name, fx] of Object.entries(FIXTURES)) {
     assert.match(svg, />R&amp;D &lt;draft&gt;\.dst</);
   });
 }
+
+// Thread colors: a PES that names its threads (written by pyembroidery: red, blue, yellow).
+const READERS = JSON.parse(read('tests/fixtures/readers.json'));
+const pes = () => F.loadEmbFile({ name: 'logo.pes' }, fromHex(READERS['three_colors.pes-v6t'].hex).buffer);
+
+test('Thread colors draws each block in its thread, light ones with a grey edge under them', () => {
+  const { header, records } = pes();
+  const svg = F.buildSvg(records, header, 7, 1, 'logo.pes', 3, { threadColors: true });
+  assert.deepEqual(strayMarkup(svg), []);
+  for (const hex of ['#ed171f', '#0a55a3', '#ffff00']) assert.match(svg, new RegExp(`<g stroke="${hex}" stroke-width="0.9"`));
+  assert.match(svg, /<g stroke="#9a9a9a" stroke-width="1.4"/);   // under the yellow
+  assert.match(svg, />Stitches \(thread colors\)</);
+  assert.doesNotMatch(svg, /<g stroke="#bbbbbb"/);
+  // The events list names each thread.
+  assert.match(svg, /<title>Isacord 1076 Blue<\/title>/);
+});
+
+test('without Thread colors the stitches stay grey, and the swatches still show the file\'s colors', () => {
+  const { header, records } = pes();
+  const svg = F.buildSvg(records, header, 7, 1, 'logo.pes', 3);
+  assert.match(svg, /<g stroke="#bbbbbb" stroke-width="0.4"/);
+  assert.doesNotMatch(svg, /<g stroke="#ed171f"/);
+  assert.match(svg, /fill="#0a55a3"/);
+});
+
+test('a design that names no threads falls back to the palette', () => {
+  const { header, records } = F.loadDstBytes(fromHex(Object.values(FIXTURES)[0].dst).buffer);
+  const svg = F.buildSvg(records, header, 7, 1, 'x.dst', 3, { threadColors: true });
+  assert.deepEqual(strayMarkup(svg), []);
+  assert.match(svg, new RegExp(`<g stroke="${vm.runInContext("COLOR_PALETTE[0]", F)}" stroke-width="0.9"`));
+});
